@@ -1,5 +1,5 @@
 # Imagin
-Interactive Image Viewer/Analyzer from streamed images or files based on python, pyqtgraph and scipy
+Interactive Viewer/Analyzer for streamed images or files based on python, pyqtgraph and scipy.
 
 Features:
 + Input source: 
@@ -17,9 +17,11 @@ Features:
 + Fast multi-spot finder, reports and logs centroid position and integral of most intense spots in the ROI.
 + Export as PNG,TIFF, JPG..., SVG?, Matplotlib, CSV, HDF5.
 + Interactive python console with access to image data, graphics objects and shell commands (program option: -c).
-+ Configuration and reporting in the parameter dock.
++ Configuration and reporting in the control pane.
 + Image references: save/retrieve image to/from a reference slots.
 + Binary operation on current image and a reference: addition, subtraction.
 + The background subtraction can be achieved by subtraction of a blurred image.
 ## Try:
     python imagine.py
+![](imagin_screenshot.png)
+
