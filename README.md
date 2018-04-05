@@ -1,5 +1,6 @@
 # Imagin
 Interactive Image Viewer/Analyzer from streamed images or files based on python, pyqtgraph and scipy
+
 Features:
 + Input source: 
     * file, 
