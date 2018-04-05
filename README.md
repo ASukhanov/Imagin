@@ -22,6 +22,6 @@ Features:
 + Binary operation on current image and a reference: addition, subtraction.
 + The background subtraction can be achieved by subtraction of a blurred image.
 ## Try:
-    python imagine.py
+    python imagin.py
 ![](imagin_screenshot.png)
 
