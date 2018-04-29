@@ -15,6 +15,7 @@ Features:
 + ROI and embedded plot for measuring image values.
 + Isocurves. The isocurve level defines the threshold for spot finding.
 + Fast multi-spot finder, reports and logs centroid position and integral of most intense spots in the ROI.
++ Fitted ellipses plotted: the contour ellipses which covers the area of 50% of spot brightness.  
 + Export as PNG,TIFF, JPG..., SVG?, Matplotlib, CSV, HDF5.
 + Interactive python console with access to image data, graphics objects and shell commands (program option: -c).
 + Configuration and reporting in the parameter dock.
@@ -31,7 +32,8 @@ The PyPNG (option -e png) supports 16-bit and more per channel for PNG images,
 it is pure python can be downloaded from: https://github.com/drj11/pypng.
 The PyPNG is slow on color images.
 '''
-__version__ = 'v01 2018-04-05' # created
+#__version__ = 'v01 2018-04-05' # created
+__version__ = 'v02 2018-04-27' faster find_spots(), contour ellipses 
  
 import io
 import sys
@@ -41,6 +43,21 @@ import struct
 import subprocess
 import os
 import threading
+from collections import OrderedDict
+from json import dumps
+
+#from PyQt4 import QtGui, QtCore
+from pyqtgraph.Qt import QtGui, QtCore
+import pyqtgraph as pg
+import pyqtgraph.dockarea
+import pyqtgraph.console
+# Interpret image data as row-major instead of col-major
+pg.setConfigOptions(imageAxisOrder='row-major')
+
+import numpy as np
+#import skimage.transform as st
+from scipy import ndimage
+import math
 
 #````````````````````````````Stuff for profiling``````````````````````````````
 from timeit import default_timer as timer
@@ -72,18 +89,6 @@ def profDif(first,last):
     return '%0.3g'%(profilingState[last] - profilingState[first])
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     
-#from PyQt4 import QtGui, QtCore
-from pyqtgraph.Qt import QtGui, QtCore
-import pyqtgraph as pg
-import pyqtgraph.dockarea
-import pyqtgraph.console
-# Interpret image data as row-major instead of col-major
-pg.setConfigOptions(imageAxisOrder='row-major')
-
-import numpy as np
-#import skimage.transform as st
-from scipy import ndimage
-
 # if graphics is done in callback, then we need this:
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_X11InitThreads)
 
@@ -93,6 +98,7 @@ app = QtGui.QApplication([])
 pargs = None
 #imager = None
 MaxSpotLabels = 16
+Prec = 2 # precision for logging and display
 DocksShrinked = False
 #````````````````````````````Helper Functions`````````````````````````````````        
 def printi(msg): print('info: '+msg)
@@ -119,6 +125,15 @@ def cprintw(msg): # print to Console
     if gWidgetConsole:
         gWidgetConsole.write('#WARNING: '+msg+'\n') # use it to inform the user
     printw(msg)
+
+def checkPath(path):
+# check if path exists, if not, create directory
+    try:
+        if not os.path.exists(path):
+            print('checkPath created new path:',path)
+            os.makedirs(path)
+    except Exception as e:
+        cprinte('in checkPath '+path+' error: '+str(e))
 
 def rgb2gray(data):
     # convert RGB to Grayscale
@@ -205,55 +220,76 @@ def sh(s): # console-available metod to execute shell commands
 
 #````````````````````````````Spot processing stuff````````````````````````````
 
-def centroid(data): # the fastest.
-    pos = np.array([0.,0.])
-    width = np.array([0.,0.])
+def centroid(data,PCC=False):
+    '''Returns first (mean) an second (sigma) moments of 2D array data, 
+    if PCC = True, then also returns the Person Correlation Coefficient (PCC).
+    Caution on PCC calculation: depending on the numbers involved, it can 
+    sometimes be numerically unstable'''
+    s = np.zeros(2) # sum of samples along axis
+    ss = np.zeros(2) # sum of squares of samples along axis
+    sxy = 0. #sum of X[i]*Y[i]
+    iax = [0.]*2 # index vectors along axis
+    # ofs is added to index vector and subtracted afterwards,
+    # this is done to include information from the first row/column.
+    ofs = 0. 
+    n = 0 # number of samples
     for axis in (0,1):
-        i = np.arange(data.shape[axis],dtype=float)#.astype(float)
+        idx = range(data.shape[axis])
+        iax[axis] = np.array(idx,dtype=float) + ofs #.astype(float)
         oppositeAxis = int(not axis)
         projection = data.sum(axis = oppositeAxis).astype(float)
         psum = projection.sum()
-        moment1 = np.dot(projection/psum,i)
-        pos[oppositeAxis] = moment1
-        width[oppositeAxis] = np.sqrt(np.dot(projection/psum,(i-moment1)**2)) #moment2
-    return pos,width
+        s[axis] = np.dot(projection,iax[axis])
+        ss[axis] = np.dot(projection,iax[axis]**2)
+        if axis == 1:
+            n += sum(projection)
+            if PCC:
+                # get sum(xy) for correlation coeff.
+                for i in idx:
+                    sxdot = (i+ofs)*np.dot(data[:,i],iax[oppositeAxis])
+                    sxy += sxdot
+    
+    #n = np.sum(data) # this is equally fast
+    sigman = np.sqrt(n*ss - s**2)
+    means = s/n - ofs
+    sigmas = sigman/n
+    pcc = (n*sxy - s[0]*s[1]) / (sigman[0]*sigman[1]) if PCC else 0.
+    return means, sigmas, pcc, n
 
-def findSpots(region,threshold,maxSpots):
-    # find up to maxSpots in the ndarray region and return its centroids and sum.
+def find_spots(region, threshold, maxSpots):
+    '''find up to maxSpots in the ndarray region and return its centroids and sums
+    '''
+    rh,rw =  region.shape
+    #print('>find_spots:','hw:',(rh,rw),(region[0,0],region[0,rw-1]))
+
     profile('startFind')
-    # Set everything below the threshold to zero:
-    z_thresh = np.copy(blur(region))
-    profile('blurring')
-    z_thresh[z_thresh<threshold] = 0
+    above_threshold = np.copy(region)
+    above_threshold[above_threshold < threshold] = 0
     profile('thresholding')
     
     # now find the objects
-    labeled_image, number_of_objects = ndimage.label(z_thresh)
+    labeled, number_of_objects = ndimage.label(above_threshold)
     profile('labeling')
     
-    # sort the objects according to its sum
-    sums = ndimage.sum(z_thresh,labeled_image,index=range(1,number_of_objects+1))
-    #printd('sums:'+str(sums))
+    # sort the labels according to their sums
+    sums = ndimage.sum(above_threshold,labeled,index=range(1,number_of_objects+1))
     sumsSorted = sorted(enumerate(sums),key=lambda idx: idx[1],reverse=True)
-    #printd('sums:'+str(sums))
-    labelsSortedBySum = [i[0] for i in sumsSorted]
-    #printd(str(labelsSortedBySum))
+    labelIndexesSortedBySum = [i[0] for i in sumsSorted]
     profile('sums')
-    peak_slices = ndimage.find_objects(labeled_image)
-    largestSlices = [(peak_slices[i],sums[i]) for i in labelsSortedBySum]
+    peak_slices = ndimage.find_objects(labeled)
     profile('find')
     
     # calculate centroids
     centroids = []
-    for peak_slice,s in largestSlices[:maxSpots]:
-        dy,dx  = peak_slice
-        x,y = dx.start, dy.start
-        #reg = z_thresh[peak_slice]
-        p,w = centroid(z_thresh[peak_slice])
-        centroids.append((x+p[0],y+p[1],s,w))
+    for i in labelIndexesSortedBySum[:maxSpots]:
+        islice = peak_slices[i]
+        y,x = islice[0].start, islice[1].start
+        only_labeled = np.copy(above_threshold[islice])
+        only_labeled[labeled[islice] != i+1] = 0 # zero all not belonging to label i+1
+        p,w,pcc,s = centroid(only_labeled.T,PCC=True)
+        centroids.append(((x+p[0], y+p[1]), w, pcc, s))
     profile('centroids')
     return centroids
-
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,    
 Console = True # needed only when the interactive console is used
 if Console: 
@@ -449,8 +485,10 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.spotLog = None # enable logging of calculated spot parameters
         self.events = 0 # counter of processed events
         self.threshold = pargs.threshold # threshold for image thresholding
+        self.cleanImage = False # show image only
         self.maxSpots = pargs.maxSpots # number of spots to find
         self.spots = [] # calculated spot parameters
+        self.spotShapes = [] # spot finder graphics objects
         self.roiArray = [] # array of ROI-selected data
         self.save = False # enable the continuous saving of imahes 
         self.controlSystem = 'TEST' # part of the savePat
@@ -469,7 +507,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.ref_Y = None
         self.pixelPmm = None
         self.spotParToMM = False # convert spot parameters to milimeters
-        self.background = None
+        self.subtraction = None
+        self.sizeFactor = 1.
         # connect signal to slot
         self.signalDataArrived.connect(self.process_image) # use mySlot because cannot connect external slot
         profile('start')
@@ -477,6 +516,13 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
     def start(self):
         path = '/tmp/'
         self.savePath = path.replace('TEST',self.controlSystem)+self.pvname+'/'
+
+        checkPath(self.savePath)
+        self.refPath = self.savePath+'refs/'
+        checkPath(self.refPath)
+        self.logPath = self.savePath+'logs/'
+        checkPath(self.logPath)
+        
         print('Processing thread for '+self.pvname+' started')
         thread = threading.Thread(target=self.procThread)
         thread.start()
@@ -485,6 +531,33 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         ans = QtGui.QMessageBox.question(self.gl, 'Confirm', text)
         #,                QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
         return 1 if ans == QtGui.QMessageBox.Ok else 0
+
+    def open_spotLog(self):
+        pname = self.pvname
+        if pargs.backend == 'file':
+            # strip the path, leave only the filename
+            pname = pname.split('/')[-1:][0].rsplit('.',1)[0]
+        checkPath(self.logPath)
+        fn = self.logPath+'sl_'+pname\
+          +time.strftime('_%y%m%d%H%M%S.json')
+        self.spotLog = open(fn,'w',1)
+        cprint('file: '+self.spotLog.name+' opened')
+        
+        # dump static parameters
+        logdata = OrderedDict([\
+          ('version', __version__),
+          ('refreshRate', self.refresh),
+          ('roi', self.roiRect),
+          ('threshold', self.threshold),
+          ('imageHWPB', self.hwpb),
+          ('sizeFactor', self.sizeFactor),
+          ('pixelPmm', round(self.pixelPmm,4)),
+          ('imageCount', self.events),         
+          ('spotInfo', 'mean(x,y),sigma(x,y),pcc,sum'),
+        ])
+        self.spotLog.write(dumps(logdata))#,indent=2))
+        self.spotLog.write('\n')
+        printd('open,written:'+str(logdata))      
 
     def show(self):
         ''' Display the widget, called once, when the first image is available'''
@@ -502,8 +575,12 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.numRefs = 5
         refs = ['ref'+str(i) for i in range(self.numRefs)]
         refreshList = ['1Hz','0.1Hz','10Hz']
-        refresh = str(1./self.refresh)+'Hz'
+        refresh = str(self.refresh)+'Hz'
         if pargs.backend == 'file': refreshList.append('Instant')
+        if pargs.userAddon:
+            paramAddon = {'name': 'Addon', 'type': 'group', 'children': Addon.controlPane}
+        else:
+            paramAddon = {'name': 'Addon', 'type': 'group'}
         params = [
             {'name': 'Control', 'type': 'group', 'children': [
                 {'name':'Event','type':'int','value':0,
@@ -516,40 +593,35 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                   'tip': 'Enable/disable saving of images'},
                 {'name':'View saved images', 'type': 'action',
                   'tip':'View saved images using GraphicMagic, use space/backspace for next/previous image'},
+                {'name':'Threshold', 'type': 'float', 'value':self.threshold,
+                  'tip': 'Threshold level for spot finding, changed with isoCurve level'},
+                {'name':'Clean Image', 'type': 'bool', 'value':self.cleanImage,
+                  'tip': 'Show image only'},
             ]},
             {'name': 'Configuration', 'type': 'group', 'children': [
                 {'name':'Color', 'type':'list','values':['Native','Gray','Red','Green','Blue'],
                   'tip':'Convert image to grayscale or use only one color channel'},
-                {'name':'Refresh', 'type':'list','values':refreshList,
+                {'name':'Refresh Rate', 'type':'list','values':refreshList,
                   'value':refresh,'tip':'Refresh rate'},
                 {'name':'Rotate', 'type': 'float', 'value': 0,
                   'tip':'Rotate image view by degree clockwise'},
-                {'name':'Blur', 'type': 'action',
-                  'tip':'Convert the current image to gray and blur it using gaussian filter with sigma 2'},
-                {'name':'Background', 'type':'list','values':['None',] + refs,
+                {'name':'Subtract', 'type':'list','values':['None',] + refs,
                   'tip':'Streaming subtraction of a reference image inside the ROI'},
                 {'name':'RefRing', 'type': 'bool', 'value': False,
                   'tip':'Draw reference ring'},
-                #{'name':'Debug', 'type': 'bool', 'value': False},
-                #{'name':'Sleep', 'type': 'float', 'value': 0},
-                #{'name':'Test', 'type': 'str', 'value': 'abcd'},
-                #{'name':'Debug Action', 'type': 'action'},
+                 {'name':'Axes in mm', 'type': 'bool', 'value': False,
+                  'tip':'convert coordinates to milimeters'},
             ]},
             {'name':'SpotFinder', 'type':'group', 'children': [
                 {'name':'MaxSpots', 'type': 'int', 'value':self.maxSpots,
-                  'limits':(0,MaxSpotLabels),
+                  'limits':(0,pargs.maxSpots),
                   'tip': 'Max number of spots to find in the ROI'},
                 {'name':'Found:', 'type': 'int', 'value':0,'readonroiArrayly':True,
                   'tip': 'Number of spots found in the ROI'},
-                {'name':'Threshold', 'type': 'float', 'value':self.threshold,
-                  'tip': 'Threshold level for spot finding, changed with isoCurve level'},
-                {'name':'Spots', 'type':'str','value':'(0,0)',
-                  'readonly': True,'tip':'X,Y and integral of found spots'},
-                {'name':'mm', 'type': 'bool', 'value': False,
-                  'tip':'convert coordinates to milimeters'},
                 {'name':'SpotLog', 'type': 'bool', 'value': False,
                   'tip':'Log the spots parameters to a file'},
             ]},
+            paramAddon,
             {'name':'Reference images', 'type': 'group','children': [
                 {'name':'Slot','type':'list','values': refs,
                   'tip':'Slot to store/retrieve/ reference image to/from local file "slot#.png"'},
@@ -559,6 +631,14 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 {'name':'Retrieve', 'type': 'action'},
                 {'name':'Add', 'type': 'action'},
                 {'name':'Subtract', 'type': 'action'},
+            ]},
+            {'name':'For Experts', 'type':'group', 'children': [
+                {'name':'Blur', 'type': 'action',
+                  'tip':'Convert the current image to gray and blur it using gaussian filter with sigma 2'},
+                #{'name':'Debug', 'type': 'bool', 'value': False},
+                #{'name':'Sleep', 'type': 'float', 'value': 0},
+                #{'name':'Test', 'type': 'str', 'value': 'abcd'},
+                #{'name':'Debug Action', 'type': 'action'},
             ]},
         ]
         #```````````````````````````Create parameter tree`````````````````````````````
@@ -609,6 +689,16 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         cmd = 'xterm -e python imageFrames.py '+self.savePath+'IV_'+self.pvname+'_*'
                         cprint('executing:'+str(cmd))
                         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True) #stderr=subprocess.PIPE)
+                    elif parItem == 'Threshold':
+                        self.threshold = itemData
+                    elif parItem == 'Clean Image':
+                        self.cleanImage = itemData
+                        if self.cleanImage:
+                            self.remove_spotShapes()
+                            self.hide_isocurve()
+                            self.mainWidget.removeItem(self.roi)
+                        else:
+                            self.mainWidget.addItem(self.roi)
                         
                 elif parGroupName == 'Configuration':               
                     if parItem == 'Color':
@@ -630,65 +720,36 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.grayData = rgb2gray(self.data)
                         self.updateImageItemAndRoi()
                         self.updateIsocurve()
-                    elif parItem == 'Blur':
-                        #TODO: blur color images
-                        self.data = blur(self.data)
-                        self.updateImageItemAndRoi()
-                    elif parItem == 'Refresh':
-                        self.refresh = {'1Hz':1,'0.1Hz':10,'10Hz':0.1,'Instant':0}[itemData]
-                    elif parItem == 'Background':
+                    elif parItem == 'Refresh Rate':
+                        self.refresh = {'1Hz':1,'0.1Hz':0.1,'10Hz':10,'Instant':1000}[itemData]
+                    elif parItem == 'Subtract':
                         if itemData == 'None':
-                            self.background = None
+                            self.subraction = None
                         else:
-                            fn = pargs.logdir+self.pvname+'_'+itemData+'.png'
-                            self.background = self.shapeData(self.load(fn))
+                            fn = self.refPath+'_'+itemData+'.png'
+                            self.subraction = self.shapeData(self.load(fn))
                     elif parItem == 'RefRing':
                         if itemData:
                             self.refRing = self.createRefRing()
                             self.mainWidget.addItem(self.refRing)
                         else:
                             self.mainWidget.removeItem(self.refRing)
-                    elif parItem == 'Debug':
-                        pargs.dbg = itemData
-                        printi('Debugging is '+('en' if pargs.dbg else 'dis')+'abled')
-                    elif parItem == 'Sleep':
-                        self.sleep = itemData
-                    elif parItem == 'Debug Action':
-                        printi('Debug Action pressed')
-                        print(self.qMessage('confirm debug'))
-                        # add here the action to test
-                        #printi('rd:'+str(self.receivedData.shape))
-                        #self.receivedData = self.receivedData[:600,:1000]
-                        #printi('rd:'+str(self.receivedData.shape))
-                        #self.data = self.receivedData
-                        #self.updateImageItemAndRoi()
+                    elif  parItem == 'Axes in mm':
+                        self.spotParToMM = itemData
+                        self.redraw_axes()                        
                         
                 if parGroupName == 'SpotFinder':               
                     if parItem == 'MaxSpots':
                         self.maxSpots = itemData
-                    elif parItem == 'Threshold':
-                        self.threshold = itemData
                     elif parItem == 'mm':
                         self.spotParToMM = itemData
                     elif parItem == 'SpotLog':
                         if itemData:
-                            try:
-                                pname = self.pvname.replace(':','_')
-                                if pargs.backend == 'file':
-                                    # strip the path, leave only the filename
-                                    pname = pname.split('/')[-1:][0].rsplit('.',1)[0]
-                                print(pname)
-                                fn = pargs.logdir+'logs/'+'sl_'+pname\
-                                  +time.strftime('_%y%m%d%H%M%S.log')
-                                self.spotLog = open(fn,'w',1)
-                                cprint('file: '+self.spotLog.name+' opened')
-                            except Exception as e: 
-                                cprinte('opening '+fn+': '+str(e))
-                                self.spotLog = None
+                            self.open_spotLog()
                             if self.spotLog:
-                                cmd = ['xterm','-e','tail -f '+fn]
+                                cmd = ['xterm','-e','tail -f '+str(self.spotLog.name)]
                                 #print 'tail:',cmd
-                                #time.sleep(.5)
+                                time.sleep(.5)
                                 p = subprocess.Popen(cmd)
                         else:
                             try: 
@@ -723,6 +784,28 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         else:
                             self.referenceOperation(fn,parItem)
                            
+                elif parGroupName == 'Addon':
+                    Addon.addonClicked(parItem,itemData)
+
+                elif parGroupName == 'For Experts':
+                    if parItem == 'Blur':
+                        #TODO: blur color images
+                        self.data = blur(self.data)
+                        self.updateImageItemAndRoi()
+                    elif parItem == 'Debug':
+                        pargs.dbg = itemData
+                        printi('Debugging is '+('en' if pargs.dbg else 'dis')+'abled')
+                    elif parItem == 'Sleep':
+                        self.sleep = itemData
+                    elif parItem == 'Debug Action':
+                        printi('Debug Action pressed')
+                        ## print all graphics objects:
+                        #print('mw:',self.mainWidget)
+                        ##print(dir(self.mainWidget))
+                        #items = self.mainWidget.items
+                        #for i in items: 
+                        #    print(i)
+
         #QtGui.QSpinBox.setKeyboardTracking(False) # does not work
         self.pgPar.sigTreeStateChanged.connect(handle_change)
            
@@ -825,16 +908,14 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             dockPlot.addWidget(self.plot)
 
             h,w,p,b = self.hwpb
-            #self.roi = pg.ROI([w*0.25, h*0.25], [w*0.5, h*0.5])
-            #self.roi.addScaleHandle([1, 1], [0, 0])
-            rect = (w*0.25, h*0.25, w*0.5, h*0.5) if self.roiRect == None else self.roiRect
+            rect = [i*g for i,g in zip((w,h,w,h),self.roiRect)]
             self.roi = pg.RectROI(rect[:2], rect[2:], sideScalers=True)
             self.mainWidget.addItem(self.roi)
             self.roi.setZValue(10)  # make sure pargs.roi is drawn above image
             
             # create max number of spot labels
             self.spotLabels = [pg.TextItem('*',color='r',anchor=(0.5,0.5)) 
-              for i in range(MaxSpotLabels)]
+              for i in range(pargs.maxSpots)]
             for sl in self.spotLabels:
                 self.mainWidget.addItem(sl)
 
@@ -859,23 +940,38 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.win.show()
         #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         
+    def redraw_axes(self):
+        axx = self.mainWidget.getAxis('bottom')
+        axy = self.mainWidget.getAxis('left')
+        rx,ry = axx.range, axy.range
+        if self.spotParToMM:
+            rx[0] = self.pix2mm(rx[0],0.)[0]
+            rx[1] = self.pix2mm(rx[1],0.)[0]
+            ry[0] = self.pix2mm(0.,ry[0])[1]
+            ry[1] = self.pix2mm(0.,ry[1])[1]
+            axx.setRange(*rx)
+            axy.setRange(*ry)
+        else:
+            # Not a best method to revert axes to pixels
+            # by slightly resizing it...
+            size = self.win.size()
+            
     def setCalibs(self,pixPerMM=10.,ringDiameter=(100,100),ringCenter=(0,0)):
         self.ref_diameter = ringDiameter
         self.pixelPmm = pixPerMM
         self.ref_X,self.ref_Y = ringCenter
 
     def createRefRing(self):
-        #print self.ref_diameter, self.ref_X,  self.ref_Y
-        n = 100
-        rx = self.ref_diameter[0]/2
-        ry = self.ref_diameter[1]/2
-        t = np.linspace(0,2*np.pi,n)
-        x = np.sin(t)*rx
-        y = np.cos(t)*ry
         #color = 'b'
         color = (199,234,70) #lime
         pen = pg.mkPen(color=color, width=1, style=QtCore.Qt.DashLine)
-        return pg.PlotCurveItem(x+self.ref_X,y+self.ref_Y,pen=pen)
+        x = self.ref_X/self.sizeFactor + self.hwpb[1]/2.
+        y = self.ref_Y/self.sizeFactor + self.hwpb[0]/2.
+        dx = self.ref_diameter[0]/self.sizeFactor
+        dy = self.ref_diameter[1]/self.sizeFactor
+        refring = pg.QtGui.QGraphicsEllipseItem(x-dx/2.,y-dy/2.,dx,dy)
+        refring.setPen(pen)
+        return refring
         
     def load(self,fn):
     # load image from file
@@ -951,6 +1047,92 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
     def updateTitle(self):
         self.win.setWindowTitle(('Waiting','Paused')[self.paused]+' '+self.winTitle)
                 
+    def standard_process(self,offset):
+        # standard analysis
+        ox,oy = offset
+        self.spots = find_spots(self.roiArray,self.threshold,self.maxSpots)
+        profile('spotsFound')
+        if pargs.profile:
+            print(profStates('initRoi','spotsFound'))
+            print('FindSpot time: '+profDif('initRoi','spotsFound'))
+        spen = pg.mkPen('r')
+        logdata = OrderedDict([('time:',time.strftime('%y-%m-%d %H:%M:%S'))])
+        #Prec = 2
+        for i,spot in enumerate(self.spots):
+            #print 'l%i:(%0.4g,%0.4g)'%(i,spot[0],spot[1])
+            p,wPx,pcc,s = spot
+            xPx,yPx = p[0]+ox, p[1]+oy
+            #print('widths:',w,'pcc:',pcc,pcc**2)
+            
+            # convert to mm if needed and record results
+            #x,y = [round((pos-c[0])*c[1],Prec) for pos,c in zip((xPx,yPx),conv)]
+            #w = [round(wPx[0]*conv[0][1],Prec), round(wPx[1]*conv[1][1],Prec)]  
+            if self.spotParToMM:
+                x,y = self.pix2mm(xPx,yPx)
+                w = self.pix2mmScale(*wPx)
+            else:
+                x,y = xPx,yPx
+                w = wPx
+            x,y = round(x,Prec), round(y,Prec)
+            w = [round(w[0],Prec), round(w[1],Prec)]
+            # record the results
+            logdata['spot_'+str(i)] = ((x,y),w,round(pcc,Prec),s)
+            
+            if not self.cleanImage:
+                # show spotShapes
+                self.spotLabels[i].setPos(xPx,yPx)
+                # rotate ellipse only when the pcc is significant
+                # otherwise the angle is not reliable
+                ew,eh = wPx
+
+                def ellipse_prob05(sigmaX,sigmaY,pcc):
+                    # Parameters of the probability 0.5 ellipse
+                    # Contour ellipse with sum = 0.5 spot sum
+                    tan = 2.*pcc*sigmaX*sigmaY/(sigmaX**2 - sigmaY**2)
+                    theta = math.atan(tan)/2.
+                    cos2 = math.cos(theta)**2
+                    sin2 = 1. - cos2
+                    cs = 2*cos2 - 1. # cos2 - sin2
+                    sigmaX2 = sigmaX**2
+                    sigmaY2 = sigmaY**2
+                    sigmaU = math.sqrt((cos2*sigmaX2 - sin2*sigmaY2)/cs)
+                    sigmaV = math.sqrt((cos2*sigmaY2 - sin2*sigmaX2)/cs)
+                    return theta,sigmaU,sigmaV
+
+                theta,sigmaU,sigmaV = ellipse_prob05(ew,eh,pcc)
+                    
+                spotShape = pg.QtGui.QGraphicsEllipseItem(xPx-sigmaU,yPx-sigmaV,sigmaU*2.,sigmaV*2.)
+                spotShape.setTransformOriginPoint(xPx,yPx)
+                if theta:
+                    spotShape.setRotation(np.rad2deg(theta))
+                
+                spotShape.setPen(spen)
+                self.mainWidget.addItem(spotShape)
+                self.spotShapes.append(spotShape)
+                            
+        # reset outstanding spotLabels
+        for j in range(len(self.spots),len(self.spotLabels)):
+            self.spotLabels[j].setPos(0,0)
+        self.set_dockPar('SpotFinder','Found:',len(self.spots))
+        #self.set_dockPar('SpotFinder','Spots',msg)
+        if self.spotLog:
+            #print('ld:',logdata)
+            if self.save:
+                #print('if:'+self.imageFile)
+                logdata['file'] = '_'.join(self.imageFile.split('_')[-2:])
+            self.spotLog.write(dumps(logdata))#,indent=2))
+            self.spotLog.write('\n')
+            #printd('written:'+str(logdata))
+
+    def remove_spotShapes(self):
+        # remove previously found spots
+        for s in self.spotShapes:
+            self.mainWidget.removeItem(s)
+        self.spotShapes = []
+        # move labels to 0
+        for i in range(len(self.spotLabels)):
+            self.spotLabels[i].setPos(0,0)
+
     def updateRoi(self):
     # callback for handling ROI
         profile('initRoi')
@@ -959,44 +1141,15 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.roiArray = self.grayData[slices]
         oy,ox = slices[0].start, slices[1].start
         profile('roiArray')
+        self.remove_spotShapes()
         
         # find spots using isoLevel as a threshold
         if self.threshold>1 and self.maxSpots>0:
-            self.spots = findSpots(self.roiArray,self.threshold,self.maxSpots)
-            profile('spotsFound')
-            if pargs.profile:
-                print(profStates('initRoi','spotsFound'))
-                print('FindSpot time: '+profDif('initRoi','spotsFound'))
-            #self.spots = [(x+ox+0.5,y+oy+0.5,s) for x,y,s in self.spots]
-            self.spots = [[x+ox,y+oy,s,w] for x,y,s,w in self.spots]
-            msg = ''
-            h,w = self.data.shape[:2]
-            # optional conversion from pixels to milimeters
-            if self.spotParToMM:
-                mm = 'mm'
-                conv = [(w/2.,self.pixelPmm),(h/2.,self.pixelPmm)] 
-            else: 
-                mm = 'px'
-                conv = [(0,1),(0,1)]
-            
-            for i,spot in enumerate(self.spots):
-                #print 'l%i:(%0.4g,%0.4g)'%(i,spot[0],spot[1])
-                self.spotLabels[i].setPos(spot[0],spot[1])
-                spot[:2] = [(pos-c[0])/c[1] for pos,c in zip(spot[:2],conv)]
-                x,y,s = spot[:3]
-                wx,wy = spot[3]
-                wx /= conv[0][1]
-                wy /= conv[1][1]
-                msg += '%5.1f,%5.1f,%0.4g,%0.4g,%0.4g,\t,'%(x,y,wx,wy,s)
-            # reset outstanding spotLabels
-            for j in range(len(self.spots),len(self.spotLabels)):
-                self.spotLabels[j].setPos(0,0)
-            self.set_dockPar('SpotFinder','Found:',len(self.spots))
-            self.set_dockPar('SpotFinder','Spots',msg)
-            if self.spotLog: 
-                #printd('findSpots: '+msg)
-                spotLogTxt = time.strftime('%y-%m-%d %H:%M:%S,')+mm+',\t'+msg
-                self.spotLog.write(spotLogTxt+'\n')
+            self.standard_process((ox,oy))
+            if pargs.userAddon:
+                Addon.process(self.roiArray,self.threshold,(ox,oy),
+                  self.mainWidget,logPath=self.logPath,
+                  cameraName=self.cameraName,imageFile=self.imageFile)
         
         # plot the ROI histograms
         meansV = self.data[slices].mean(axis=0) # vertical means
@@ -1011,7 +1164,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.plot.plot(x,meansV[:,1],pen='g',stepMode=s) # plot green
             self.plot.plot(x,meansV[:,2],pen='b',stepMode=s) # plot blue
             meansVG = self.grayData[slices].mean(axis=0)
-            self.plot.plot(x,meansVG,pen='w',stepMode=s) # plot white
+            pen = 'k' if pargs.white else 'w'
+            self.plot.plot(x,meansVG,pen=pen,stepMode=s) # plot white
         #profile('roiPlot')
         
     def updateIsocurve(self):
@@ -1028,7 +1182,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         #printi('isolevel:'+str(self.threshold))
         self.iso.setLevel(self.threshold)
         #profile('iso')
-        self.set_dockPar('SpotFinder','Threshold',self.threshold)
+        self.set_dockPar('Control','Threshold',self.threshold)
         if self.roi: 
             self.updateRoi()
          
@@ -1098,8 +1252,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.show()
         else:  # udate data
             #TODO: react on shape change correctly, cannot rely on self.hwpb because of possible rotationg2-cec.laser-relay-cam_ref1.png
-            if self.background is not None:
-                self.data = self.data.astype(int) - self.background
+            if self.subtraction is not None:
+                self.data = self.data.astype(int) - self.subtraction
                 self.grayData = rgb2gray(self.data)
             if self.save: self.saveImage() #TODO shouldn't it be after update
             if pargs.backend == 'file':
@@ -1189,6 +1343,8 @@ def main():
       'Disable histogram with contrast and isocurve contol')
     parser.add_argument('-w','--width', help=
       'For blob data: width,height,bits/pixel i.e 1620,1220,12. The bits/pixel may be omitted for standard images')
+    parser.add_argument('-W','--white', action='store_true', help=
+      'White background, black foreground for all graphics')
     parser.add_argument('-P','--profile', action='store_true', help=
       'Enable code profiling')
     parser.add_argument('-p','--pause', action='store_true', help=
@@ -1208,10 +1364,13 @@ def main():
       help='Maximum number of spots to find')
     parser.add_argument('-t','--threshold',type=float,default=0,
       help='Threshold for spot finding')
-    parser.add_argument('-O','--ROI',default='',
-      help='ROI rectangle: posX,pozY,sizeX,sizeY')
+    parser.add_argument('-O','--ROI',default='0.05,0.05,0.9,0.9',
+      help='ROI rectangle: posX,pozY,sizeX,sizeY, i.e -O0.05,0.05,0.9,0.9')
     parser.add_argument('-v','--vertSize',type=float,default=800,
       help='Vertical size of the display window')
+    parser.add_argument('-u','--userAddon', help=
+      '''User addon, the addon script name should be prefixed with ivAddon_,
+      i.e -uNewAddon will try to import ivAddon_NewAddon.py''')          
     defaultPname = 'heic1523b.jpg'
     parser.add_argument('pname', nargs='*', 
       default=[defaultPname],
@@ -1221,8 +1380,12 @@ or -bfile /tmp/*.png -t100 -a100,
 or -bhttp https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.''')
 
     pargs = parser.parse_args()
-    #print('pname:',pargs.pname)
-    #pname = pargs.pname[0]
+    #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    #`````````````````````````````````````````````````````````````````````````
+    if pargs.white:
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')
+
     pname = pargs.pname
 
     extractor = {'qt':'QT','cv':'OpenCV','png':'PyPng','raw':'raw'}
