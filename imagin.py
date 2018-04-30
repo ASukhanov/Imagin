@@ -33,7 +33,7 @@ it is pure python can be downloaded from: https://github.com/drj11/pypng.
 The PyPNG is slow on color images.
 '''
 #__version__ = 'v01 2018-04-05' # created
-__version__ = 'v02 2018-04-27' faster find_spots(), contour ellipses 
+__version__ = 'v02 2018-04-30' #faster find_spots(), contour ellipses
  
 import io
 import sys
@@ -219,41 +219,41 @@ def sh(s): # console-available metod to execute shell commands
     print(subprocess.Popen(s,shell=True, stdout = None if s[-1:]=="&" else subprocess.PIPE).stdout.read())
 
 #````````````````````````````Spot processing stuff````````````````````````````
-
-def centroid(data,PCC=False):
-    '''Returns first (mean) an second (sigma) moments of 2D array data, 
-    if PCC = True, then also returns the Person Correlation Coefficient (PCC).
-    Caution on PCC calculation: depending on the numbers involved, it can 
-    sometimes be numerically unstable'''
+def moments(image):
+    '''Calculates image moments M00, M10, M01, M20, M02 and M11,
+    returns n,s,ss,sxy where n=M00, s=(M10,M01), ss=(M20,M02), sxy=M11'''
     s = np.zeros(2) # sum of samples along axis
     ss = np.zeros(2) # sum of squares of samples along axis
     sxy = 0. #sum of X[i]*Y[i]
     iax = [0.]*2 # index vectors along axis
-    # ofs is added to index vector and subtracted afterwards,
-    # this is done to include information from the first row/column.
-    ofs = 0. 
     n = 0 # number of samples
     for axis in (0,1):
-        idx = range(data.shape[axis])
-        iax[axis] = np.array(idx,dtype=float) + ofs #.astype(float)
+        idx = range(image.shape[axis])
+        iax[axis] = np.array(idx,dtype=float)
         oppositeAxis = int(not axis)
-        projection = data.sum(axis = oppositeAxis).astype(float)
+        projection = image.sum(axis = oppositeAxis).astype(float)
         psum = projection.sum()
         s[axis] = np.dot(projection,iax[axis])
         ss[axis] = np.dot(projection,iax[axis]**2)
         if axis == 1:
             n += sum(projection)
-            if PCC:
-                # get sum(xy) for correlation coeff.
-                for i in idx:
-                    sxdot = (i+ofs)*np.dot(data[:,i],iax[oppositeAxis])
-                    sxy += sxdot
+            for i in idx:
+                sxdot = i*np.dot(image[:,i],iax[oppositeAxis])
+                sxy += sxdot
+    return n,s,ss,sxy
+
+def centroid(data):
+    '''Returns first (mean) an second (sigma) moments of 2D array data, 
+    if PCC = True, then also returns the Person Correlation Coefficient (PCC).
+    Caution on PCC calculation: depending on the numbers involved, it can 
+    sometimes be numerically unstable'''
     
+    n,s,ss,sxy = moments(data)
     #n = np.sum(data) # this is equally fast
     sigman = np.sqrt(n*ss - s**2)
-    means = s/n - ofs
+    means = s/n
     sigmas = sigman/n
-    pcc = (n*sxy - s[0]*s[1]) / (sigman[0]*sigman[1]) if PCC else 0.
+    pcc = (n*sxy - s[0]*s[1]) / (sigman[0]*sigman[1])
     return means, sigmas, pcc, n
 
 def find_spots(region, threshold, maxSpots):
@@ -286,7 +286,7 @@ def find_spots(region, threshold, maxSpots):
         y,x = islice[0].start, islice[1].start
         only_labeled = np.copy(above_threshold[islice])
         only_labeled[labeled[islice] != i+1] = 0 # zero all not belonging to label i+1
-        p,w,pcc,s = centroid(only_labeled.T,PCC=True)
+        p,w,pcc,s = centroid(only_labeled.T)
         centroids.append(((x+p[0], y+p[1]), w, pcc, s))
     profile('centroids')
     return centroids
@@ -1099,6 +1099,9 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                     sigmaV = math.sqrt((cos2*sigmaY2 - sin2*sigmaX2)/cs)
                     return theta,sigmaU,sigmaV
 
+                if min(wPx) < 0.5:
+                    continue
+            
                 theta,sigmaU,sigmaV = ellipse_prob05(ew,eh,pcc)
                     
                 spotShape = pg.QtGui.QGraphicsEllipseItem(xPx-sigmaU,yPx-sigmaV,sigmaU*2.,sigmaV*2.)
@@ -1360,9 +1363,9 @@ def main():
       'Data access backend: file/epics/http') 
     parser.add_argument('-l','--logdir', default = '/tmp/',
       help='Directory for logging and references')
-    parser.add_argument('-m','--maxSpots',type=int,default=4,
+    parser.add_argument('-m','--maxSpots',type=int,default=16,
       help='Maximum number of spots to find')
-    parser.add_argument('-t','--threshold',type=float,default=0,
+    parser.add_argument('-t','--threshold',type=float,default=50,
       help='Threshold for spot finding')
     parser.add_argument('-O','--ROI',default='0.05,0.05,0.9,0.9',
       help='ROI rectangle: posX,pozY,sizeX,sizeY, i.e -O0.05,0.05,0.9,0.9')
