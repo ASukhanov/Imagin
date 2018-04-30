@@ -719,7 +719,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.data = rotate(self.receivedData,self.dockParRotate)
                         self.grayData = rgb2gray(self.data)
                         self.updateImageItemAndRoi()
-                        self.updateIsocurve()
+                        self.update_isocurve()
                     elif parItem == 'Refresh Rate':
                         self.refresh = {'1Hz':1,'0.1Hz':0.1,'10Hz':10,'Instant':1000}[itemData]
                     elif parItem == 'Subtract':
@@ -891,12 +891,11 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.isoLine = pg.InfiniteLine(angle=0, movable=True, pen='g')
             self.contrast.vb.addItem(self.isoLine)
             self.contrast.vb.setMouseEnabled(y=False) # makes user interaction a little easier
-            self.isoLine.setValue(0.8)
+            self.isoLine.setValue(self.threshold)
             self.isoLine.setZValue(1000) # bring iso line above contrast controls
             # Connect callback to signal
-            #self.isoLine.sigDragged.connect(self.updateIsocurve)
-            self.isoLine.sigPositionChangeFinished.connect(self.updateIsocurve)
-            #self.updateIso()
+            #self.isoLine.sigDragged.connect(self.update_isocurve)
+            self.isoLine.sigPositionChangeFinished.connect(self.update_isocurve)
 
         if pargs.roi:
         # Custom ROI for selecting an image region
@@ -1171,8 +1170,11 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.plot.plot(x,meansVG,pen=pen,stepMode=s) # plot white
         #profile('roiPlot')
         
-    def updateIsocurve(self):
+        
+    def update_isocurve(self):
     # callback for handling ISO
+        if not self.cleanImage:
+            self.show_isocurve()
         printd('>uIsoCurve')
         #profile('init iso')
         #if len(self.roiArray):
@@ -1188,6 +1190,13 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.set_dockPar('Control','Threshold',self.threshold)
         if self.roi: 
             self.updateRoi()
+         
+    def show_isocurve(self): 
+        #print('isocurve enabled')
+        self.iso.setPen(pg.mkPen('g'))
+    def hide_isocurve(self):
+        #print('isocurve disabled')
+        self.iso.setPen(pg.mkPen(None))
          
     def updateImageItemAndRoi(self):
         self.imageItem.setImage(self.data)
