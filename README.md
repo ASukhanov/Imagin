@@ -3,24 +3,27 @@ Interactive Viewer/Analyzer for streamed images or files based on python, pyqtgr
 
 Features:
 + Input source: 
-    * file, 
+    * File system, 
     * HTTP link to image, 
-    * EPICS PV (requires epics.py).
-+ Accepts two-dimensional data, user have to define the array shape (program options: -w --width,height,bits/channel).
-+ Wide range of image formats.
-+ 16-bit/channel images supported (requires PyPNG or OpenCV).
-+ Streaming rotation and flipping.
+    * RHIC ADO parameter (requires cns.py), 
+    * EPICS PV (requires pyepics),
+    * Local USB camera (requires openCV).
++ Default image format is PNG, other formats supported as well.
++ 16+ bit/channel images supported.
++ Image orientation and rotation (program options: -o and -R).
 + Interactive zooming, panning, rotation.
-+ Contrast control: Displays histogram of image data with movable region defining the dark/light levels.
-+ ROI and embedded plot for measuring image values.
-+ Isocurves. The isocurve level defines the threshold for spot finding.
-+ Fast multi-spot finder, reports and logs centroid position and integral of most intense spots in the ROI.
-+ Export as PNG,TIFF, JPG..., SVG?, Matplotlib, CSV, HDF5.
-+ Interactive python console with access to image data, graphics objects and shell commands (program option: -c).
-+ Configuration and reporting in the control pane.
-+ Image references: save/retrieve image to/from a reference slots.
-+ Binary operation on current image and a reference: addition, subtraction.
-+ The background subtraction can be achieved by subtraction of a blurred image.
++ Contrast/Coloration control.
++ Region Of Interest (ROI) for image analysis.
++ ROI partitioning. 
++ Isocurve. The isocurve level defines the threshold for object finding.
++ Fast and robust characterization of multiple objects using fitted ellipsoids.
++ Gaussian (1D and 2D) fit for improved precision.
++ Interactive python console with access to image data, graphics objects and shell.
++ Interactive calibration of pixels to millimeters.
++ Reference Images: save/retrieve image to/from a reference slots.
++ Background subtraction using a reference image.
++ Easy extentable using with user-suplied add-ons.
++ Fast browsing/cleanup of image directories.
 ## Try:
     python imagin.py
 ![](imagin_screenshot.png)
