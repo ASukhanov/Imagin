@@ -25,6 +25,8 @@ Features:
 + Easy extentable using with user-suplied add-ons.
 + Fast browsing/cleanup of image directories.
 + Interactive python console with access to image data, graphics objects and shell.
+
+[Presentation](../master/Slides_from_ICALEPCS-2019.pdf)
 ## Try:
     python imagin.py
 ![](imagin_screenshot.png)
