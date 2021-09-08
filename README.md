@@ -28,6 +28,6 @@ Features:
 
 [Presentation](../master/Slides_from_ICALEPCS-2019.pdf)
 ## Try:
-    python imagin.py
+    python3 imagin.py -bhttp -g -t100 -m20
 ![](imagin_screenshot.png)
 
