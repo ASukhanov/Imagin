@@ -794,8 +794,10 @@ class PVMonitorHTTP(PVMonitor):
 class PVMonitorEpics(PVMonitor):
     def __init__(self,camName,**kwargs):
         super(PVMonitorEpics,self).__init__()
-        #import cad_io.epicsAccess_caproto as epicsInterface
-        from .pubEPICS import Access as epicsInterface
+        try:
+            from . import epicsAccess_caproto as epicsInterface
+        except:
+            import cad_io.epicsAccess_caproto as epicsInterface
         self.pvAccess = epicsInterface
         self.pvsystem = 'Epics'
         self.camName = camName
@@ -2965,8 +2967,9 @@ for epics:
     if len(pargs.pname) == 0:
         if pargs.backend == 'ado':
             from imageas import cameras
-            #from imageas_wrk import cameras# for testing, imageas_wrk supposed to be a soft link to the library folder
             pargs.pname = [cameras.select('ADOcamera')]
+        elif pargs.backend == 'epics':
+            pargs.pname = ['13SIM1']
         else:
             pargs.pname = ['?']
     #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
