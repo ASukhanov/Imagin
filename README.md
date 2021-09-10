@@ -27,9 +27,9 @@ Features:
 + Fast browsing/cleanup of image directories.
 + Interactive python console with access to image data, graphics objects and shell.
 
-[Presentation](../master/Slides_from_ICALEPCS-2019.pdf)
+[Presentation](docs/Slides_from_ICALEPCS-2019.pdf)
 ## Try:
     python3 -m imagin -b epics 13SIM1 -t50
     python3 -m imagin -bfile docs/GalaxyClusterAbell1689_sn_l.jpg -t100 -m40
-![](imagin_screenshot.png)
+![](docs/imagin_screenshot.png)
 
