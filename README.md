@@ -27,9 +27,21 @@ Features:
 + Fast browsing/cleanup of image directories.
 + Interactive python console with access to image data, graphics objects and shell.
 
-[Presentation](docs/Slides_from_ICALEPCS-2019.pdf)
-## Try:
-    python3 -m imagin -b epics 13SIM1 -t50
-    python3 -m imagin -bfile docs/GalaxyClusterAbell1689_sn_l.jpg -t100 -m40
 ![](docs/imagin_screenshot.png)
+
+[Presentation](docs/Slides_from_ICALEPCS-2019.pdf)
+## Examples
+
+    python3 -m imagin -bfile docs/GalaxyClusterAbell1689_sn_l.jpg -t100 -m40
+
+Note: the simulated camera under EPICS can be run from a docker:
+https://hub.docker.com/r/klauer/simioc-docker
+
+Set up the simulated camera:
+
+    python3 setup_SimDetector.py
+
+Start application:
+
+    python3 -m imagin -b epics sim:det -m16 -t80
 

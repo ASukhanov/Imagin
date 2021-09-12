@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive image analysis from cameras in EPICS
-infrastructures, from USB cameras or from files"""
-__version__ = 'v1.1.20 2021-09-10'
+infrastructure, from USB cameras or from files"""
+__version__ = 'v1.1.21 2021-09-10'
 
 import sys, os, subprocess, time, datetime, struct
 from timeit import default_timer as timer
@@ -775,7 +775,8 @@ class PVMonitorHTTP(PVMonitor):
             print(('elapsed:',self.req.elapsed))
             print(('history:',self.req.history))
             print(('Content-Type:',self.req.headers['Content-Type']))
-            print(('cont:',type(self.req.content),len(self.req.content),self.req.content[:20]))
+            print(('cont:',type(self.req.content),len(self.req.content)\
+            ,self.req.content[:20]))
         self.data = Codec.loadFromData(self.req.content)
         return self.data,time.time()
 
@@ -789,8 +790,11 @@ class PVMonitorEpics(PVMonitor):
         super(PVMonitorEpics,self).__init__()
         try:
             from . import epicsAccess_caproto as epicsInterface
-        except:
+        except Exception as e:
+            printw(f'module not found: .epicsAccess_caproto: {e}')
+            # try to get it from cad_io package
             import cad_io.epicsAccess_caproto as epicsInterface
+
         self.pvAccess = epicsInterface
         self.pvsystem = 'Epics'
         self.camName = camName
