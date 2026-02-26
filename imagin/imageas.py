@@ -1,7 +1,4 @@
 """Image analysis methods, most of the are deployed in the imgMan"""
-#__version__ = '01 2020-11-09'# adopted from iv.py
-#__version__ = '02 2020-11-10'# tested positive with imgMan
-#__version__ = '03 2020-11-10'# Image is Codec feature, rotate() removed
 #TODO: design it as a class, cprint should be class feature
 #__version__ = 'v0.1.5 2020-11-13'# tested with iv and imgMan
 __version__ = 'v0.1.6a 2021-02-02'# parent_cprint
