@@ -1,8 +1,5 @@
-"""Image analysis methods, most of the are deployed in the imgMan"""
-#TODO: design it as a class, cprint should be class feature
-#__version__ = 'v0.1.5 2020-11-13'# tested with iv and imgMan
-__version__ = 'v0.1.6a 2021-02-02'# parent_cprint
-print(f'imageas {__version__}')
+"""Image analysis methods"""
+__version__ = 'v0.1.7 2026-03-06'# minor cleanup
 
 import math
 import numpy as np
@@ -481,8 +478,7 @@ Codec = CodecPIL
 %gui qt
 import pyqtgraph as pg
 import imageas
-fname = '/cfs/e/LoggerData/run_fy20/fullRun/CEC/Cameras/cs2-inj.yag2-cam/scans/20200710/IM_cs2-inj.yag2-cam_20200710_090501797054.png'
-img = imageas.codec.load(fname)
+img = imageas.codec.load(fileName)# load PNG image
 pg.show(img)
 '''
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,       
