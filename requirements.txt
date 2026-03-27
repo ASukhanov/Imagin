@@ -1,5 +1,5 @@
 caproto==0.8.1
-certifi==2021.5.30
+certifi==2022.12.7
 charset-normalizer==2.0.4
 idna==3.2
 numpy==1.21.2
