@@ -1,6 +1,6 @@
 """Interactive image analysis from cameras in EPICS
 infrastructure, from USB cameras or from files"""
-__version__ = 'v2.0.0 2026-04-07'# Updated to QT 5.15, pyqtgraph 0.14
+__version__ = 'v2.0.1 2026-04-07'# widget.win replaced with widget.
 
 import sys, os, subprocess, time, datetime, struct
 from timeit import default_timer as timer
@@ -259,9 +259,9 @@ class GraphRoiProj():
         self.widget = pg.plot([0,0],[0],stepMode=True,pen='k',clear=True)
         self.widget.showGrid(True,True)
         self.hv = {X:'Horizontal',Y:'Vertical'}
-        self.widget.win.setWindowTitle(self.hv[self.axis]\
+        self.widget.setWindowTitle(self.hv[self.axis]\
         +' projection of the brightest spot')
-        self.widget.win.resize(480,320)
+        self.widget.resize(480,320)
         self.widget.setLabel('bottom','Position (mm)')
         self.widget.setLabel('left','Average spot intensity')
         wb = self.widget.getViewBox()
@@ -329,15 +329,15 @@ class GraphRoiProj():
           
     def __del__(self):
         #print('deleting GraphRoiProj:'+str(GraphRoiProj))
-        try:    self.widget.win.close()
+        try:    self.widget.close()
         except: pass
 
 class GraphRoiIntensity():
     def __init__(self):
         self.widget = None
         self.widget = pg.plot([0,0],[1],stepMode=True,pen='b')
-        self.widget.win.resize(480,320)
-        self.widget.win.setWindowTitle('Pixel Amplitudes in ROI')
+        self.widget.resize(480,320)
+        self.widget.setWindowTitle('Pixel Amplitudes in ROI')
         self.widget.showGrid(True,True)
         self.widget.setLabel('bottom','Pixel amplitude')
         self.widget.setLabel('left','Count')
@@ -348,8 +348,9 @@ class GraphRoiIntensity():
     def update(self,array,*args):
         mx = array.max()
         mn = array.min()
+        print(f'>>update GraphRoiIntensity: min {mn}, max {mx}, shape {array.shape}, sum: {array.flatten().sum()}')
         try:
-            y,x = np.histogram(array.flatten(),bins=np.linspace(mn,mx+1,mx-mn+2))
+            y,x = np.histogram(array.flatten(),bins=np.linspace(mn,mx,mx-mn+1))
         except:
             printw('too few gradations in histogram')
             return
@@ -363,7 +364,7 @@ class GraphRoiIntensity():
             
     def __del__(self):
         printi('deleting GraphRoiIntensity')
-        try:    self.widget.win.close()
+        try:    self.widget.close()
         except: pass
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 #````````````````````````````Interactive console``````````````````````````````
@@ -1131,7 +1132,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.addon.exit()
         for item in self.outsideGraphs:
             #self.outsideGraphs[item].__del__()
-            self.outsideGraphs[item].widget.win.close()
+            self.outsideGraphs[item].widget.close()
         try:    self.win.close()
         except: pass
         #self.exit() # has no effect
@@ -2431,12 +2432,6 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 pass
         
     def mainWidget_changed(self):
-        if len(self.data.shape) == 2:
-            pass
-        else:
-            msg = 'Avoiding colormapping for color images'
-            printw(msg)
-
         # redrawing axes here have no effect as it will be overridden
         # we need to postpone the activation somehow.
         # simple delayed thread is not working.

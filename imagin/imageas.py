@@ -389,7 +389,7 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
 
         too_small = min(w) < 0.01# this is, actually check for 0.
         if too_small:
-            cprintw( 'Spot too small '+str(w)+', '+str(('','too small')[too_small]))
+            cprintw( 'Spot too small '+str(w))
             continue
 
         fittedPars = []
