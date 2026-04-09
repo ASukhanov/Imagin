@@ -32,7 +32,10 @@ Features:
 [Presentation](docs/Slides_from_ICALEPCS-2019.pdf)
 ## Examples
 
+```bash
     python3 -m imagin -bfile docs/GalaxyClusterAbell1689_sn_l.jpg -t100 -m40
+    python3 -m imagin -bfile ~/Pictures/*.png
+```
 
 Note: the simulated camera under EPICS can be run from a docker:
 https://hub.docker.com/r/klauer/simioc-docker
