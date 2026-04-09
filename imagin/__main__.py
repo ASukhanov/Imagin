@@ -1,20 +1,23 @@
-#!/usr/bin/env python3
 """Interactive image analysis from cameras in EPICS
 infrastructure, from USB cameras or from files"""
-__version__ = 'v1.1.21 2021-09-10'
+__version__ = 'v2.0.0 2026-04-07'# Updated to QT 5.15, pyqtgraph 0.14
 
 import sys, os, subprocess, time, datetime, struct
 from timeit import default_timer as timer
 import traceback
 import threading
-#from json import dumps
 import json
-    
-from PyQt5 import QtWidgets as QW, QtGui, QtCore
-Gray_color_table = [QtGui.qRgb(i, i, i) for i in range(256)]
+
 import pyqtgraph as pg
+print(f'pyqtgraph version: {pg.__version__}, Qt: {pg.Qt.QtVersion}')
+QW = pg.Qt.QtWidgets
+QtGui = pg.Qt.QtGui
+QtCore = pg.Qt.QtCore
+ViewBoxMenu = pg.graphicsItems.ViewBox.ViewBoxMenu
+
+Gray_color_table = [QtGui.qRgb(i, i, i) for i in range(256)]
 import pyqtgraph.dockarea
-import pyqtgraph.console
+from pyqtgraph.console import ConsoleWidget
 import pyqtgraph.parametertree.parameterTypes as pTypes
 from pyqtgraph.parametertree import Parameter, ParameterTree, ParameterItem
 from pyqtgraph.parametertree.parameterTypes import (
@@ -37,17 +40,14 @@ except:
 from scipy import ndimage
 import math
 
-try:
-    from . import imageas as ialib
-except:
-    import imageas.lib as ialib
+from . import imageas as ialib
 Codec = ialib.Codec()
 
 try:
     from cad_io.adoaccess import IORequest, __version__ as adoAccess_version
     adoAccess = IORequest()
 except:
-    adoAccess_version = 'not available'
+    adoAccess_version = 'not supported'
 
 # if graphics is done in callback, then we need this:
 QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_X11InitThreads)
@@ -127,8 +127,13 @@ def croppedText(txt, limit=200):
 gWidgetConsole = None
 def cprint(msg):
     """Print info on console dock"""
-    if gWidgetConsole:
-        gWidgetConsole.write('#'+msg+'\n') # use it to inform the user
+    txt = f'`{msg}\n'
+    try:
+        if gWidgetConsole:
+            gWidgetConsole.repl.write(txt, style='output') # use it to inform the user
+    except Exception as e:
+        printw(f'in cprint error: {txt}:'+str(e))
+
 ialib.set_parent_cprint(cprint)
 
 def cprinte(msg): # print to Console
@@ -144,7 +149,7 @@ def cprintw(msg): # print to Console
     printw(msg)
 
 def font():
-    font = pg.QtGui.QFont()
+    font = QtGui.QFont()
     font.setPointSize(10)
     font.setBold(True)
     return font
@@ -210,13 +215,25 @@ def rotate(data,degree):
     return datao
 
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-class MainWindow(pg.QtGui.QMainWindow):
+class MainWindow(QW.QMainWindow):
     """MainWindow with modified closeEvent() to exit application properly"""
+
+    resized = QtCore.Signal()
+    def  __init__(self, parent=None):
+        print('Initializing MainWindow')
+        super(MainWindow, self).__init__(parent=parent)
+        #TODO# self.resized.connect(imager.window_resized)
+
     def closeEvent(self, event):
         # recursion may happen if it is called from myExit, but that is fine
         printi('>MainWindow.closeEvent')
         imager.myExit()
-        
+
+    def resizeEvent(self, event):
+        super(MainWindow, self).resizeEvent(event)
+        if imager.axesInMm:
+            self.resized.emit()
+
 #````````````````````````````Graphs outside of the main widget````````````````
 def plot_gauss(parent, x, pars, scale=1.):
     #print(f'plot_gauss pars:{pars}')
@@ -353,27 +370,27 @@ class GraphRoiIntensity():
 Console = True
 if Console: 
     #````````````````````````````Bug fix in pyqtgraph 0.10.0``````````````````
-    import pickle
-    class CustomConsoleWidget(pyqtgraph.console.ConsoleWidget):
+    #import pickle
+    class CustomConsoleWidget(ConsoleWidget):
         """ Fixing bugs in pyqtgraph 0.10.0:
         Need to rewrite faulty saveHistory()
         and handle exception in loadHistory() if history file is empty."""
-        def loadHistory(self):
-            """Return the list of previously-invoked command strings
-            (or None)."""
-            if self.historyFile is not None:
-                try:
-                    pickle.load(open(self.historyFile, 'rb'))
-                except Exception as e:
-                    #printi('History file '+' not open: '+str(e))
-                    pass
+        # def loadHistory(self):
+        #     """Return the list of previously-invoked command strings
+        #     (or None)."""
+        #     if self.historyFile is not None:
+        #         try:
+        #             pickle.load(open(self.historyFile, 'rb'))
+        #         except Exception as e:
+        #             #printi('History file '+' not open: '+str(e))
+        #             pass
 
-        def saveHistory(self, history):
-            """Store the list of previously-invoked command strings."""
-            #TODO: no sense to provide history argument, use self.input.history instead
-            if self.historyFile is not None:
-                #bug#pickle.dump(open(self.historyFile, 'wb'), history)
-                pickle.dump(history,open(self.historyFile, 'wb'))
+        # def saveHistory(self, history):
+        #     """Store the list of previously-invoked command strings."""
+        #     #TODO: no sense to provide history argument, use self.input.history instead
+        #     if self.historyFile is not None:
+        #         #bug#pickle.dump(open(self.historyFile, 'wb'), history)
+        #         pickle.dump(history,open(self.historyFile, 'wb'))
 #`````````````````````````````````````````````````````````````````````````````
 class CustomViewBox(pg.ViewBox):
     """Defines actions, activated on the right mouse click in the dock
@@ -409,8 +426,8 @@ class CustomViewBox(pg.ViewBox):
         self.menu.setTitle(str(self.dockName)+ " options..")
                    
         # zoom to ROI
-        zoomToROI = pg.QtGui.QWidgetAction(self.menu)
-        zoomToROIGui = pg.QtGui.QCheckBox('Zoom to ROI')
+        zoomToROI = QtGui.QWidgetAction(self.menu)
+        zoomToROIGui = QtGui.QCheckBox('Zoom to ROI')
         zoomToROIGui.setChecked(True)
         zoomToROIGui.stateChanged.connect(
           lambda x: imager.setup_zoomROI(x))
@@ -418,8 +435,8 @@ class CustomViewBox(pg.ViewBox):
         self.menu.addAction(zoomToROI)
 
         # showControls
-        showControls = pg.QtGui.QWidgetAction(self.menu)
-        showControlsGui = pg.QtGui.QCheckBox('ShowControls')
+        showControls = QtGui.QWidgetAction(self.menu)
+        showControlsGui = QtGui.QCheckBox('ShowControls')
         showControlsGui.setChecked(not pargs.miniPanes)
         showControlsGui.stateChanged.connect(
           lambda x: imager.hideDocks(not x))
@@ -427,16 +444,16 @@ class CustomViewBox(pg.ViewBox):
         self.menu.addAction(showControls)
         
         # AxesMM
-        axesMM = pg.QtGui.QWidgetAction(self.menu)
-        axesMMGui = pg.QtGui.QCheckBox('Millimeters')
+        axesMM = QtGui.QWidgetAction(self.menu)
+        axesMMGui = QtGui.QCheckBox('Millimeters')
         axesMMGui.setChecked(imager.axesInMm)
         axesMMGui.stateChanged.connect(lambda x: imager.set_axes_scale(x))
         axesMM.setDefaultWidget(axesMMGui)
         self.menu.addAction(axesMM)
 
         # isocurve
-        isocurve = pg.QtGui.QWidgetAction(self.menu)
-        isocurveGui = pg.QtGui.QCheckBox('Isocurve')
+        isocurve = QtGui.QWidgetAction(self.menu)
+        isocurveGui = QtGui.QCheckBox('Isocurve')
         isocurveGui.setChecked(1)
         isocurveGui.stateChanged.connect(
           lambda x: imager.show_isocurve(x))
@@ -453,12 +470,10 @@ def MySlot(a):
     else:
         printe('Imager not defined yet')
 #````````````````````````````Custom parameter widgets``````````````````````````
-from pyqtgraph import ViewBoxMenu
-
 class SliderParameterItem(WidgetParameterItem):
     """Slider widget, it is needed for parameter tree"""
     def makeWidget(self):
-        w = QtGui.QSlider(QtCore.Qt.Horizontal, self.parent())
+        w = QW.QSlider(QtCore.Qt.Horizontal, self.parent())
         w.sigChanged = w.valueChanged
         w.sigChanged.connect(self._set_tooltip)
         self.widget = w
@@ -476,11 +491,11 @@ class ButtonParameterItem(ParameterItem):
     """ Button with reduced spacing than 'action'"""
     def __init__(self, param, depth):
         ParameterItem.__init__(self, param, depth)
-        self.layoutWidget = QtGui.QWidget()
-        self.layout = QtGui.QHBoxLayout()
+        self.layoutWidget = QW.QWidget()
+        self.layout = QW.QHBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layoutWidget.setLayout(self.layout)
-        self.button = QtGui.QPushButton(param.name())
+        self.button = QW.QPushButton(param.name())
         #self.layout.addSpacing(100)
         self.layout.addWidget(self.button)
         self.layout.addStretch()
@@ -1505,8 +1520,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.update_isocurve()
                         
                     elif parItem == 'Refresh Rate':
-                        frequency = {'1Hz':1,'0.1Hz':0.1,'10Hz':10\
-                        ,'Instant':1000}[itemData]
+                        frequency = {'1Hz':1,'0.1Hz':0.1,'10Hz':10,
+                                     'Instant':1000}.get(itemData, 1)
                         self.change_refreshRate(frequency)
                     #elif  parItem == 'Axes in mm':
                     #    self.set_axes_scale(itemData)
@@ -1648,7 +1663,10 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                                 
                         elif itemData == 'Native':
                             pargs.gray = False
-                            self.data = self.savedData
+                            try:
+                                self.data = self.savedData
+                            except AttributeError as e:
+                                cprintw(f'Restoring native color: {e}')
                             self.grayData = ialib.rgb2gray(self.data)
                             self.update_imageItem_and_ROI()
                         else:
@@ -1834,6 +1852,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 'roi':self.roi, 'data':self.data, 'image': self.qimg, 
                 'imageItem':self.imageItem, 'pargs':pargs, 'sh':sh},
                 historyFile='/tmp/pygpm_console.pcl',text="")
+            gWidgetConsole.repl.write('Welcome to the interactive console of imageViewer!\n',style='command')
             self.widgetConsole = gWidgetConsole # could be needed for addons
             self.registerDock('dockConsole',gWidgetConsole,(0,10),'bottom')
             self.docks['dockConsole'][0].setStretch(0,0)
@@ -1946,9 +1965,9 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         y = self.ref_Y/self.sizeFactor + h/2.
         dx = self.ref_diameter/self.sizeFactor
         dy = dx
-        refring = pg.QtGui.QGraphicsEllipseItem(x-dx/2.,y-dy/2.,dx,dy)
-        cross0 = pg.QtGui.QGraphicsLineItem(x-dx/2.,y,x+dx/2.,y)
-        cross1 = pg.QtGui.QGraphicsLineItem(x,y-dy/2.,x,y+dy/2.)
+        refring = QW.QGraphicsEllipseItem(x-dx/2.,y-dy/2.,dx,dy)
+        cross0 = QW.QGraphicsLineItem(x-dx/2.,y,x+dx/2.,y)
+        cross1 = QW.QGraphicsLineItem(x,y-dy/2.,x,y+dy/2.)
         self.refRing = (refring,cross0,cross1)
         for i in self.refRing:
             i.setPen(pen)
@@ -2170,7 +2189,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                     too_small = max(wPx) < 0.1 # 0.1 is big enough for ellipse
                     if not too_small:                    
                         # draw ellipse
-                        spotShape = pg.QtGui.QGraphicsEllipseItem(posPx[0]-sigmaU,
+                        spotShape = QW.QGraphicsEllipseItem(posPx[0]-sigmaU,
                           posPx[1]-sigmaV,sigmaU*2.,sigmaV*2.)
                         spotShape.setTransformOriginPoint(*posPx)
                         if theta:
@@ -2709,7 +2728,7 @@ class AddonBase():
     def addon_clicked(self,parItem,itemData):
         """Called when user item in control pane is clicked. For example:
         if parItem == 'Where My Results?':
-            w = IV.QtGui.QWidget()
+            w = IV.QW.QWidget()
             msg = 'The results are in /tmp/'
             IV.QtGui.QMessageBox.information(w,'Message',msg)
         """
@@ -2861,7 +2880,7 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
         if pargs.fullsize:
             printw('option --fullsize is not working with python3 yet, discarded')
             pargs.fullsize = False
-    qApp = QtGui.QApplication([])
+    qApp = QW.QApplication([])
 
     pargs.backend = pargs.backend.lower()
     if len(pargs.pname) == 0:
