@@ -41,9 +41,7 @@ python -m imagin -b file sample_images/*.jpg -t 100 -m 40
 python -m imagin -b file ~/Pictures/*.png
 python -m imagin -b pva image0:image
 ```
-
-## Start the image simulator for `image0:image`
-
+To start the image simulator for `image0:image`:
 ```bash
 pip install epicsdev
 python -m epicsdev.imagegen
