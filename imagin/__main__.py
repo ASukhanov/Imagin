@@ -18,8 +18,8 @@ print(f'pyqtgraph version: {pg.__version__}, Qt: {pg.Qt.QtVersion}, numpy: {np._
 # requirements: pyqtgraph 0.14+, scipy 1.17, matplotlib 3.7, numpy < 2.0
 if pg.__version__ < '0.14':
     raise ImportError("pyqtgraph version 0.14 or higher is required")
-if np.__version__ >= '2.0':
-    raise ImportError("numpy version 1.x is required, numpy 2.0 or higher is not supported")
+#if np.__version__ >= '2.0':
+#    raise ImportError("numpy version 1.x is required, numpy 2.0 or higher is not supported")
 import pyqtgraph.dockarea
 from pyqtgraph.console import ConsoleWidget
 import pyqtgraph.parametertree.parameterTypes as pTypes
@@ -580,7 +580,6 @@ class PVMonitor(QtCore.QThread): # inheritance from QtCore.QThread is needed for
         self.exit = False
         self.dbg = None # debugging flag
         self.refreshTime = 1
-        self.__version = '?'
         self.timeOfPreviousEvent = 0
         self.ts = 0# timestamp from data
         self.initialSetting = {'thresholdS':None, 'roiS':None, 'subtractPedS':'None',
@@ -640,6 +639,7 @@ class PVMonitor(QtCore.QThread): # inheritance from QtCore.QThread is needed for
 #````````````````````````````PVMonitor for data from a file```````````````````
 class PVMonitorFile(PVMonitor):
     def __init__(self,pvname,**kwargs):
+        self.__version__ = 'v0.0.1'
         super(PVMonitorFile,self).__init__()
         if len(pvname)==1:
             import glob
@@ -757,6 +757,7 @@ class PVMonitorFile(PVMonitor):
 #````````````````````````````PVMonitor for a HTTP image```````````````````````
 class PVMonitorHTTP(PVMonitor):
     def __init__(self,pvname,**kwargs):
+        self.__version__ = 'v0.0.1'
         super(PVMonitorHTTP,self).__init__()
         self.pvsystem = 'HTTP'
         self.qimg = QtGui.QImage() # important to have it persistent
@@ -850,7 +851,6 @@ class PVMonitorEpics(PVMonitor):
             cprintw(f'no data from {self.imagePV}, is manager all right? {e}')
             return [],0
         #print(croppedText(f'gdt:{self.ts,data}'))
-        self.blob = data
         return data, self.ts
 
     def get_image_shape(self):
@@ -868,9 +868,10 @@ class PVMonitorEpics(PVMonitor):
         printi(f'image_shape:{r}, dataType:{dataType}')
         return r
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-#````````````````````````````PVMonitor of an USB camera``````````````````````````
+#````````````````````````````PVMonitor of USB camera``````````````````````````
 class PVMonitorUSB(PVMonitor):
     def __init__(self,pvname,**kwargs):
+        self.__version__ = 'v0.0.1'
         super(PVMonitorUSB,self).__init__()
         self.pvsystem = 'USB'
         # if usb port is not numeric, search ports from 9 to 0
@@ -908,6 +909,63 @@ class PVMonitorUSB(PVMonitor):
         self.videoCapture.release()
         printi('USB camera released')
         self.exit = True
+
+#````````````````````````````PVMonitor of EPICS PVAccess``````````````````````
+class PVMonitorPVA(PVMonitor):
+    def __init__(self, pv, **kwargs):
+        super(PVMonitorPVA,self).__init__()
+        from p4p.client.thread import Context
+        from p4p import version
+        self.__version__ = version
+
+        self.pvAccess = Context('pva')
+        self.pvsystem = 'EpicsPVA'
+        self.imagePV = pv
+        self.value = None
+
+        # check if device exists it will raise exception
+        try:
+            r = self.pvAccess.get(self.imagePV)
+        except TimeoutError:
+            printe(f'Timeout accessing PV {self.imagePV}')
+            sys.exit(1)
+
+        # setup subscribed delivery
+        self.subscription = self.pvAccess.monitor(self.imagePV, self.callback)
+        self.SignalSourceDataReady.connect(MySlot)
+
+    def clear(self):
+        print('Closing PVA subscription')
+        self.subscription.close()
+
+    def callback(self, value):
+        self.value = value
+        #print(f'>pva callback {self.eventNumber}: {self.value}')
+        profile('>callback')
+        ts = time.time()
+        if ts >= self.timeOfPreviousEvent + self.refreshTime:
+            self.timeOfPreviousEvent = ts
+            if EventProcessingFinished.is_set() or self.eventNumber == 0:
+                EventProcessingFinished.clear()
+                self.SignalSourceDataReady.emit('sourceDataReady')
+            else:
+                print(f'image dropped due to busy analysis')
+                pass
+        else:
+            # do not emit data ready signal
+            print(f'image came too soon')
+            pass
+
+    def get_data_and_timestamp(self):
+        try:
+            self.eventNumber += 1
+        except Exception as e:
+            cprintw(f'no data from {self.imagePV}, is manager all right? {e}')
+            return [],0
+        data = self.value
+        ts = time.time()
+        printd(f'gdt: {ts}, data type: {type(data)}, data shape: {getattr(data, "shape", "N/A")}')
+        return data, ts  
 
 #```````````````````````````Image viewing/processing object```````````````````
 class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from QtCore.QThread is necessary
@@ -1501,9 +1559,11 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.update_isocurve()
 
                     elif parItem == 'Refresh Rate':
+                        print('>Refresh Rate changed to '+str(itemData))
                         frequency = {'1Hz':1,'0.1Hz':0.1,'10Hz':10,
-                                     'Instant':1000}.get(itemData, 1)
-                        self.change_refreshRate(frequency)
+                                     'Instant':1000}.get(itemData)
+                        if frequency == '':
+                            self.change_refreshRate(frequency)
                     #elif  parItem == 'Axes in mm':
                     #    self.set_axes_scale(itemData)
 
@@ -2493,6 +2553,17 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         data,self.timestamp = pvMonitor.get_data_and_timestamp()
         #print(f'd,t: {len(data),self.timestamp}')
         profile('get_data')
+        if data is None:
+            if self.timestamp == 0:
+                printw('No data received')
+                if self.imageItem is None:# first event was not processed
+                    printe('No valid images were found')
+                    sys.exit(1)
+                if self.backend == 'file':
+                    self.set_pause(True)
+            if not self.paused:
+                EventProcessingFinished.set()
+            return
         dataLen = len(data)
         if dataLen == 0:
             if self.timestamp == 0:
@@ -2749,14 +2820,14 @@ def main():
     f' adoaccess: {adoAccess_version},'
     f' imageas: {ialib.__version__}'
     ))
-    parser.add_argument('-a','--refreshRate',type=float,
-      help='Refresh rate [Hz]')
+    parser.add_argument('-a','--refreshRate', default=10., type=float,
+      help='Refresh rate limit [Hz] for processing and display, 0 for no limit')
     parser.add_argument('-A','--average',type=int,default=0,
       help='Averaging, number of images to average')
     parser.add_argument('-B','--black', action='store_true', help=
       'Black background, white foreground for all graphics')
-    parser.add_argument('-b','--backend', default = 'file', help=
-      'Data access backend: file/epics/http')
+    parser.add_argument('-b','--backend', default = 'file', choices=['file','epics','http','pva'], help=
+      'Data access backend')
     parser.add_argument('-c','--console', action='store_false', help=
       'Disable interactive python console')
     parser.add_argument('-C','--cameraName', default=None, help=
@@ -2860,19 +2931,15 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
     qApp = QW.QApplication([])
 
     pargs.backend = pargs.backend.lower()
-    if len(pargs.pname) == 0:
-        if pargs.backend == 'epics':
-            pargs.pname = ['13SIM1']
-        else:
-            pargs.pname = ['?']
+
     #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     #`````````````````````````````````````````````````````````````````````````
     if not pargs.black:
         pg.setConfigOption('background', 'w')
         pg.setConfigOption('foreground', 'k')
 
-    if pargs.refreshRate is None:
-        pargs.refreshRate = 50. if pargs.backend == 'file' else 1.
+    # if pargs.refreshRate is None:
+    #     pargs.refreshRate = 50. if pargs.backend == 'file' else 10.
 
     pname = pargs.pname
 
@@ -2980,6 +3047,8 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
         #    exit(1)        
         pvMonitor = PVMonitorUSB(pname[0],refreshRate=pargs.refreshRate)
         pargs.fullsize = True
+    elif pargs.backend == 'pva':
+        pvMonitor = PVMonitorPVA(pname[0],refreshRate=pargs.refreshRate)
     else:
         printw(('Unknown backend: ',pargs.backend))
         exit(8)
