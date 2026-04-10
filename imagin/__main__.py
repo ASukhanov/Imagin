@@ -2,7 +2,7 @@
 infrastructure, from USB cameras or from files
 """
 # pylint: disable=invalid-name
-__version__ = 'v2.0.1 2026-04-07'# widget.win replaced with widget.
+__version__ = 'v2.1.1 2026-04-07'# --pname is scalar. --iso removed.
 
 import sys, os, subprocess, time, datetime, struct
 from timeit import default_timer as timer
@@ -922,6 +922,7 @@ class PVMonitorPVA(PVMonitor):
         self.pvsystem = 'EpicsPVA'
         self.imagePV = pv
         self.value = None
+        printi(f'PVAccess context created, version: {self.__version__}, PV: {self.imagePV}')
 
         # check if device exists it will raise exception
         try:
@@ -1013,7 +1014,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.marksColor = (0,170,0) # color of marks and spot contours
         self.mainSpotTxt = ''
         self.roiArray = np.array([]) # array of ROI-selected data
-        self.isocurve_enabled = False
+        self.isocurve_enabled = True
         self.saving = pargs.saving # enable the continuous saving of images
         self.nImagesToTrash = 0
         self.refresh = pargs.refreshRate # refresh rate [Hz]
@@ -1537,7 +1538,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.data = rotate(self.receivedData,self.dockParRotate)
                         self.grayData = ialib.rgb2gray(self.data)
                         self.update_imageItem_and_ROI()
-                        self.update_isocurve()
+                        self.show_isocurve(False)
                     elif  parItem == 'ColorMap:':
                         if      itemData == 'user':
                             self.gl.addItem(self.contrast)
@@ -1559,7 +1560,6 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         self.update_isocurve()
 
                     elif parItem == 'Refresh Rate':
-                        print('>Refresh Rate changed to '+str(itemData))
                         frequency = {'1Hz':1,'0.1Hz':0.1,'10Hz':10,
                                      'Instant':1000}.get(itemData)
                         if frequency == '':
@@ -1838,11 +1838,12 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             # Connect callback to signal
             #self.contrast.sigLevelsChanged.connect(self.cb_contrast_levels_changed)
 
-        if pargs.iso != 'Off' and self.contrast:
-        # Isocurve drawing
-            if pargs.iso == 'ROI':
-                self.isoInRoi = True
-                printw('iso == ROI is not fully functional yet')
+        #if pargs.iso != 'Off' and self.contrast:
+        if self.contrast:
+            # Setting up isocurve item, it will be updated in show_isocurve() when the image is shown
+            # if pargs.iso == 'ROI':
+            #     self.isoInRoi = True
+            #     printw('iso == ROI is not fully functional yet')
             self.iso = pg.IsocurveItem(level=0.8)
             self.iso.setParentItem(self.imageItem)
             self.iso.setZValue(5)
@@ -1856,7 +1857,6 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             # Connect callback to signal
             #self.isoLine.sigDragged.connect(self.update_isocurve)
             self.isoLine.sigPositionChangeFinished.connect(self.update_isocurve)
-            #self.update_iso()
 
         if pargs.roi:
         # Custom ROI for selecting an image region
@@ -2453,15 +2453,14 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.mainWidget.setRange(rect=pg.QtCore.QRect(x0,y0,wx,wy))
 
     def update_isocurve(self):
-    # callback for handling ISO
+        # callback for handling ISO
         #print('update_isocurve')
         self.show_isocurve(True)
-        #profile('init iso')
-        v = self.isoLine.value()
         # inform imager on changed threshold
+        v = self.isoLine.value()
         self.set_dockPar('Control','Threshold',v)
 
-    def show_isocurve(self,show=True): 
+    def show_isocurve(self, show=True): 
         #print('show_isocurve',show)
         self.isocurve_enabled = show
         if show:
@@ -2676,7 +2675,9 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.update_imageItem_and_ROI()
         if self.events == 0:
             self.setup_zoomROI(True)
-        if self.isocurve_enabled: self.show_isocurve(False)
+        if self.isocurve_enabled:
+             #print('>ui show_isocurve False')
+             self.show_isocurve(False)
         if self.events % 100 == 0:
             try:
                 dt = timer() - ProfilingStates['>100 events']
@@ -2848,10 +2849,9 @@ def main():
       'Set it for non-gray images')
     parser.add_argument('-H','--hist', action='store_false', help=
       'Disable histogram with contrast and isocurve contol')
-    parser.add_argument('-i','--iso',default='Image',help=
-      '''Isocurve drawing options: ROI - only in ROI (default), 
-      Image - in full image, 
-      Off - no isocurve''')
+    # parser.add_argument('-i','--iso', default='Image',
+    #                     choices=['ROI', 'Image', 'Off'],help=
+    #   'Isocurve drawing options')
     parser.add_argument('-j','--pixLimit', type=int, default=0,help=
       'Contrast control level, 0 for auto.')    
     parser.add_argument('-m','--maxSpots',type=int,default=4,
@@ -2918,9 +2918,9 @@ to adjust for camera mounting orientation, mirrors, etc.
     parser.add_argument('-z','--subtract', nargs='?', const='_ref0', 
       default='None', help=
       'Name of the pedestal file to subtract, eg: -z_ref0')
-    parser.add_argument('pname', nargs='*', 
-      help='''Image stream source. i.e: -bepics 13SIM1
-or -b file docs/GalaxyClusterAbell1689_sn_l.jpg
+    parser.add_argument('pname',
+      help='''Image stream source. i.e: -b epics 13SIM1
+or -b file sample_images/*.jpg
 or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
 ''')
     pargs = parser.parse_args()
@@ -2943,7 +2943,7 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
 
     pname = pargs.pname
 
-    if not pargs.hist: pargs.iso = 'Off'
+    #if not pargs.hist: pargs.iso = 'Off'
 
     pixScale = 1.
     ref_diameter = 200
@@ -2954,22 +2954,22 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
         camNm = pargs.cameraName
     else:
         if pargs.backend == 'file':
-            camNm = pargs.pname[0]
+            camNm = pargs.pname
             if camNm[-1] == '/':
                 camNm = camNm[:-1]
             try: # get camNm from folder name: /xxx/.../camNm/xxx_camNm_xxx
-                #camNm = pargs.pname[0].split('/')[-2]
+                #camNm = pargs.pname.split('/')[-2]
                 pre,camNm = camNm.rsplit('/',1)
                 if camNm[:2] == pargs.year[:2]: # the folder is date, use the previus one
                     camNm = pre.split('/')[-1]
                 try:    camNm = camNm.split('_')[1]
                 except: pass
             except: 
-                printw('Could not get camera name from '+str(pargs.pname[0]))
+                printw('Could not get camera name from '+str(pargs.pname))
                 pass
             printi(('camNm: '+camNm))
         else:
-            camNm = pargs.pname[0]
+            camNm = pargs.pname
     camName = [camNm,'?']
     xScale = 1.
     #
@@ -3014,28 +3014,28 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
     printi(f'Rotation {pargs.rotate}, Flip: {pargs.flip}')   
 
     # instantiate the imager
-    imager = Imager(pname[0],camName)
+    imager = Imager(pname,camName)
     if pargs.pixPerMM:
         pixelPmm = pargs.pixPerMM
     imager.set_calibs(pixPerMM=pixelPmm,
       ringDiameter=ref_diameter, ringCenter=(ref_X,ref_Y), xScale=xScale)
 
     # instantiate the data monitor
-    # note, only backend file accepts list in pname, all others should use pname[0]
+    # note, only backend file accepts list in pname, all others should use pname
     # TODO: arguments for PVMonitorFile could be omitted, use pargs instead
     if pargs.backend == 'file':
         pvMonitor = PVMonitorFile(pname,camName=camName[0],refreshRate=pargs.refreshRate)
     elif pargs.backend == 'http':
         import requests as Backend
-        if pname[0] == '?':
+        if pname == '?':
             #pname = 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Hubble_deep_field.jpg/584px-Hubble_deep_field.jpg'
             #pname = 'https://www.ifa.hawaii.edu/~kaiser/pictures/ntt/a1689.gif'
             #pname = 'https://www.hep.shef.ac.uk/research/dm/images/hubbleDeepField.jpg'
             pname = ['http://www.dlr.de/dlr/en/Portaldata/1/Resources/bilder/portal/portal_2012_3/scaled/GalaxyClusterAbell1689_sn_l.jpg']
-        pvMonitor = PVMonitorHTTP(pname[0])
+        pvMonitor = PVMonitorHTTP(pname)
     elif pargs.backend == 'epics':
         #import epics as Backend
-        pvMonitor = PVMonitorEpics(pname[0],refreshRate=pargs.refreshRate)
+        pvMonitor = PVMonitorEpics(pname,refreshRate=pargs.refreshRate)
         pargs.fullsize = True
     elif pargs.backend == 'usb':
         Backend = cv2
@@ -3045,10 +3045,10 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
         #except ImportError:
         #    print("ERROR python-opencv must be installed")
         #    exit(1)        
-        pvMonitor = PVMonitorUSB(pname[0],refreshRate=pargs.refreshRate)
+        pvMonitor = PVMonitorUSB(pname,refreshRate=pargs.refreshRate)
         pargs.fullsize = True
     elif pargs.backend == 'pva':
-        pvMonitor = PVMonitorPVA(pname[0],refreshRate=pargs.refreshRate)
+        pvMonitor = PVMonitorPVA(pname,refreshRate=pargs.refreshRate)
     else:
         printw(('Unknown backend: ',pargs.backend))
         exit(8)

@@ -1,4 +1,4 @@
-# Imagin. (under active development).
+# Imagin. (Beta release).
 
 Imagin is an interactive viewer and analyzer for streamed images and image files, built with Python, pyqtgraph, and SciPy.
 
