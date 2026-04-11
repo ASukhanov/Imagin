@@ -44,7 +44,7 @@ python -m imagin -b file ~/Pictures/*.png
 ### Testing with EPICS PVAccess image simulator epicsdev.imagegen:
 ```bash
 pip install epicsdev
-python -m epicsdev.imagegen&
+python -m epicsdev.imagegen -c&
 python -m imagin -b pva -t 100 image0:image
 ```
 Animate by changing image parameters from a python script:
