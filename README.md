@@ -57,7 +57,7 @@ oneTo0 = 1 - np.linspace(0,1,11)
 scales = np.append(oneTo0[:-1], np.flip(oneTo0)[2:])
 for scale in scales:
     iface.put('image0:gridScaleX',scale)
-    time.sleep(.1)```
+    time.sleep(.1)
 ```
 ### Testing with EPICS Channel Access
 The simulated EPICS camera can be run from Docker:
