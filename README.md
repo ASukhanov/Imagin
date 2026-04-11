@@ -39,15 +39,28 @@ Imagin is an interactive viewer and analyzer for streamed images and image files
 ```bash
 python -m imagin -b file sample_images/*.jpg -t 100 -m 40
 python -m imagin -b file ~/Pictures/*.png
-python -m imagin -b pva image0:image
+
 ```
-To start the image simulator for `image0:image`:
+### Testing with EPICS PVAccess image simulator epicsdev.imagegen:
 ```bash
 pip install epicsdev
-python -m epicsdev.imagegen
+python -m epicsdev.imagegen&
+python -m imagin -b pva -t 100 image0:image
 ```
+Animate by changing image parameters from a python script:
+```python
+import time, numpy as np
+from p4p.client.thread import Context
+iface = Context('pva')
 
-The simulated EPICS camera can also be run from Docker:
+oneTo0 = 1 - np.linspace(0,1,11)
+scales = np.append(oneTo0[:-1], np.flip(oneTo0)[2:])
+for scale in scales:
+    iface.put('image0:gridScaleX',scale)
+    time.sleep(.1)```
+```
+### Testing with EPICS Channel Access
+The simulated EPICS camera can be run from Docker:
 
 https://hub.docker.com/r/klauer/simioc-docker
 
@@ -55,4 +68,3 @@ https://hub.docker.com/r/klauer/simioc-docker
 python3 setup_SimDetector.py
 python3 -m imagin -b epics sim:det -m 16 -t 80
 ```
-
