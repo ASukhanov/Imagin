@@ -1,6 +1,6 @@
-# Imagin.
+# Imagin
 
-Imagin is fast interactive viewer and analyzer for streamed images and image files, built with Python, pyqtgraph, and SciPy.
+Imagin is a fast, interactive viewer and analyzer for streamed images and image files, built with Python, pyqtgraph, and SciPy.
 
 ## Installation
 
@@ -9,14 +9,14 @@ Install the core application with file-based image support:
 ```bash
 pip install imagin
 ```
+
 ## Features
 
-- Input sources:
+- **Input sources:**
   - EPICS PVAccess and Channel Access
-  - file system
+  - File system
   - HTTP image URLs
   - USB cameras
-  
 - PNG is the default image format; other formats are also supported.
 - Fast, robust characterization of multiple objects using fitted ellipsoids.
 - Supports images with 16-bit or higher channel depth.
@@ -27,8 +27,8 @@ pip install imagin
 - ROI partitioning.
 - ROI projection plots.
 - Optional Gaussian fitting in 1D or 2D for improved precision.
-- De-speckling.
-- Automatic background elimination using prominence filtering (de-base).
+- Despeckling.
+- Automatic background elimination using prominence filtering (de-basing).
 - Background subtraction using reference images.
 - Interactive calibration from pixels to millimeters.
 - Reference image slots for saving and restoring images.
@@ -46,26 +46,34 @@ python -m imagin -b http https://cdn.esahubble.org/archives/images/large/heic152
 python -m imagin -b file sample_images/*.jpg -t 100 -m 40
 python -m imagin -b file ~/Pictures/*.png
 ```
-### Testing with EPICS PVAccess image simulator epicsdev.imagegen:
+
+### Testing with the EPICS PVAccess image simulator (`epicsdev.imagegen`)
+
 ```bash
 pip install epicsdev
-python -m epicsdev.imagegen -c&
-python -m imagin -t 100 image0:image -b pva -m9
+python -m epicsdev.imagegen -c &
+python -m imagin -t 100 image0:image -b pva -m 9
 ```
 
-Animate by changing image parameters from a python script:
+Animate by changing image parameters from a Python script:
+
 ```python
-import time, numpy as np
+import time
+import numpy as np
 from p4p.client.thread import Context
-iface = Context('pva')
 
-oneTo0 = 1 - np.linspace(0,1,11)
-scales = np.append(oneTo0[:-1], np.flip(oneTo0)[2:])
+iface = Context("pva")
+
+one_to_zero = 1 - np.linspace(0, 1, 11)
+scales = np.append(one_to_zero[:-1], np.flip(one_to_zero)[2:])
+
 for scale in scales:
-    iface.put('image0:gridScaleX',scale)
-    time.sleep(.1)
+    iface.put("image0:gridScaleX", scale)
+    time.sleep(0.1)
 ```
+
 ### Testing with EPICS Channel Access
+
 The simulated EPICS camera can be run from Docker:
 
 https://hub.docker.com/r/klauer/simioc-docker
