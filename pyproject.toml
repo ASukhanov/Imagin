@@ -20,8 +20,8 @@ dependencies = [
   "numpy<2",
   "Pillow>=8",
   "PyQt5>=5.15",
-    "pyqtgraph>=0.14",
-  "scipy",
+  "pyqtgraph>=0.14",
+  "scipy>=1.11.4",
 ]
 
 [project.optional-dependencies]
