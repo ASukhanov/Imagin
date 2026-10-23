@@ -2,6 +2,32 @@
 
 Imagin is an interactive viewer and analyzer for streamed images and image files, built with Python, pyqtgraph, and SciPy.
 
+## Installation
+
+Install the core application with file-based image support:
+
+```bash
+pip install imagin
+```
+
+Install optional backends as needed:
+
+```bash
+pip install 'imagin[http]'
+pip install 'imagin[epics]'
+pip install 'imagin[pva]'
+pip install 'imagin[usb]'
+pip install 'imagin[all]'
+```
+
+Backend extras:
+
+- `http`: image URLs via `requests`
+- `epics`: EPICS Channel Access via `caproto`
+- `pva`: EPICS PVAccess via `p4p`
+- `usb`: USB cameras via `opencv-python`
+- `all`: installs all optional backends above
+
 ## Features
 
 - Input sources:
@@ -37,8 +63,10 @@ Imagin is an interactive viewer and analyzer for streamed images and image files
 ## Examples
 
 ```bash
+python -m imagin -b http https://cdn.esahubble.org/archives/images/large/heic1523b.jpg -t 100
 python -m imagin -b file sample_images/*.jpg -t 100 -m 40
 python -m imagin -b file ~/Pictures/*.png
+
 
 ```
 ### Testing with EPICS PVAccess image simulator epicsdev.imagegen:

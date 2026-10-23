@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "imagin"
-version = "2.1.1"
+version = "3.0.0"
 authors = [
   { name="Andrey Sukhanov", email="sukhanov@bnl.gov" },
 ]
@@ -17,8 +17,33 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+  "numpy<2",
+  "Pillow>=8",
+  "PyQt5>=5.15",
     "pyqtgraph>=0.14",
+  "scipy",
 ]
+
+[project.optional-dependencies]
+http = [
+  "requests>=2",
+]
+epics = [
+  "caproto",
+]
+pva = [
+  "p4p",
+]
+usb = [
+  "opencv-python",
+]
+all = [
+  "caproto",
+  "opencv-python",
+  "p4p",
+  "requests>=2",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/ASukhanov/imagin"
 "Bug Tracker" = "https://github.com/ASukhanov/imagin"

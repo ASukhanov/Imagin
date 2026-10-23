@@ -1,5 +1,6 @@
 """Image analysis methods"""
-__version__ = 'v0.1.7 2026-03-06'# minor cleanup
+__version__ = 'v0.1.8 2026-10-22'# minor cleanup
+# pylint: disable=invalid-name
 
 import math
 import numpy as np
@@ -149,13 +150,13 @@ def centroid(data):
         ss[axis] = np.dot(projection,iax[axis]**2)
         if axis == 1:
             n += sum(projection)
-            
+
             # get sum(xy) for correlation coeff.
             # note, that section is most time-consuming
             for i in idx:
                 sxdot = i*np.dot(data[:,i],iax[oppositeAxis])
                 sxy += sxdot
-    
+
     sigman = np.sqrt(n*ss - s**2)
     means = s/n
     sigmas = sigman/n
@@ -163,7 +164,7 @@ def centroid(data):
         pcc = (n*sxy - s[0]*s[1]) / (sigman[0]*sigman[1])
     else: pcc = 0.
     return means, sigmas, pcc, n
-        
+
 #````````````````````````````Fitting helpers``````````````````````````````````
 def calculate_fitRange(region,iPosMax,width):
     """Calculate range of the fitting area
@@ -211,7 +212,7 @@ def peak_shape(xx, halfWidth):
     except: r = np.zeros(len(x))
     return r
 def func_sum_of_peaks(xx, *par):
-    # Fitting function: base and sum of peaks.
+    """Fitting function: base and sum of peaks."""
     #print('fsop:',par)
     #s = par[0] + par[1]*xx + par[2]*xx**2 # if RankBkg = 3
     s = par[0] # if RankBkg = 1
@@ -219,6 +220,7 @@ def func_sum_of_peaks(xx, *par):
         s += par[i+2]*peak_shape(xx-par[i],par[i+1])
     return s
 def fit_gaus1D(xr, yr, guess, bounds=(-np.inf, np.inf),axis='?'):
+    """Fit 1D gaussian to the data"""
     try:
         fp,pcov = curve_fit(func_sum_of_peaks,xr,yr,
           guess)
@@ -248,7 +250,7 @@ def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
         nP = fitRegion.shape[axis] # number of points summed in each column
         xyLetter = 'XY'[axis]
         #/*print( 'lp',axis,len(projection),np.argmax(projection))
-        
+
         amp = (maxLevel - base)*fitRegion.shape[axis]/2.5066
         axBase = base*fitRegion.shape[axis]
         guess = [axBase,posGuess[axis],width[axis],amp] # if  RankBkg = 1
@@ -261,11 +263,11 @@ def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
           [fitBaseBounds[1]*nP]+[+np.inf]*gl)        
         #/*bounds = ([-np.inf]+[-np.inf]*gl, [+np.inf]+[+np.inf]*gl)
         #print('bounds',bounds)*/
-        
+
         lArr = len(projection)
         xr = list(range(lArr))
         yr = projection
-        
+
         #ts = timer()
         fp = fit_gaus1D(xr,yr,guess,bounds,axis=xyLetter)
         #print( 'fitted: '+', '.join(['%.2f'%i for i in fp])+'. time:%.3f'%(timer()-ts))
@@ -280,6 +282,7 @@ def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
 
 #````````````````````````````Gauss2D``````````````````````````````````````````
 def twoD_Gaussian_tilted(xy, amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
+    """"""
     x,y = xy
     xo = float(xo)
     yo = float(yo)    
@@ -291,9 +294,11 @@ def twoD_Gaussian_tilted(xy, amplitude, xo, yo, sigma_x, sigma_y, theta, offset)
     return g.ravel()
 
 def oneD_Gaussian(x, amplitude, xo, sigma):
+    """One-dimensional gaussian function"""
     return amplitude*np.exp(-(0.5*((x-xo)/sigma)**2))
 
 def twoD_Gaussian(xy, amplitude, xo, yo, sigma_x, sigma_y, offset):
+    """Two-dimensional gaussian function without tilt"""
     x,y = xy   
     xo = float(xo)
     yo = float(yo)    
@@ -316,13 +321,12 @@ def fit_region_2D(fitRegion,pos,width,amp,base,fitBaseBounds):
     g = 1.5 # moments width is usually underestimated
     guess = [amp-base,pos[0],pos[1],width[0]*g,width[1]*g,base]
     #/*print( 'guess :',['%.2f,'%i for i in guess])*/
-    
+
     if guess[0] < base/2.:
         cprintw('too dim, guess amp:%.2f'%guess[0]+' < base/2:%.2f'%(base/2))
         return pos, width, []
 
     try:
-        ts = timer()
         fp,pcov = curve_fit(twoD_Gaussian, (x, y), fitRegion.ravel(), guess)
         #/*print( 'fitted:',['%.2f,'%i for i in fp],'time:%.3f'%(timer()-ts))*/
         stdevPars = np.sqrt(np.diag(pcov))/abs(fp)
@@ -347,18 +351,18 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
     and sums"""
     #print( 'fitBaseBounds',fitBaseBounds)
     profile('startFind')
-    
+
     above_threshold = np.copy(region) 
     #above_threshold[above_threshold < threshold] = 0
-    
+ 
     # Subtract the threshold, otherwise, if the pedestal is high,
     # we will get the sigma = ~width/sqrt(12)
     above_threshold = region - threshold
     # zero all the pixels with negative values
     above_threshold[above_threshold < 0.] = 0
-    
+
     profile('thresholding') # 5% of processing time spent here
-    
+
     # now find the objects
     labeled, number_of_objects = ndimage.label(above_threshold)
     if number_of_objects == 0:
@@ -367,14 +371,14 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
     profile('sums') #TODO: 30% of processing time spent here
     peak_slices = ndimage.find_objects(labeled)
     profile('find') #TODO: 15% of processing time spent here
-    
+
     # sort the labels according to their sums
     sums = ndimage.sum(above_threshold,labeled,
       index=list(range(1,number_of_objects+1)))
     sumsSorted = sorted(enumerate(sums),key=lambda idx: idx[1],reverse=True)
     labelIndexesSortedBySum = [i[0] for i in sumsSorted]
     profile('sort') #TODO: 15% of processing time spent here
-    
+
     # calculate centroids
     centroids = []
     fitRegion = region
@@ -433,6 +437,7 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
     return centroids, fitRegion
 
 class CodecPIL():
+    """Codec using PIL (Pillow) library"""
     Image = None
     """The PIL is best codec, as fast as QT, it takes any pixel depth.
     It can be substituted with even faster Pillow-SIMD 2.5 which is clamed to be
@@ -444,6 +449,8 @@ class CodecPIL():
         self.img = None
 
     def load(self,fname):
+        """Load image from file fname and return it as numpy array
+        The image is flipped vertically to match the display orientation"""
         # takes 40ms for 2.4Mpixel image
         self.img = self.Image.open(fname)
         if self.img.mode == 'P':# palette mode if GIF Image
@@ -451,6 +458,7 @@ class CodecPIL():
         return np.asarray(self.img)
         
     def loadFromData(self,blob): # not used
+        """Load image from binary data blob and return it as numpy array"""
         import io
         if isinstance(blob,tuple):
             blob = bytearray(blob)
@@ -460,7 +468,8 @@ class CodecPIL():
         return np.asarray(self.img)
 
     def save(self,fileName,npArray=None):
-        #print(f'codec dmax {npArray.max(), npArray.shape, npArray.dtype}')
+        """Save numpy array npArray as image to file fileName.
+        If npArray is None, save the last loaded image."""
         if True:#try:
             #ts = timer()
             if npArray is not None:
