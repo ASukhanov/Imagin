@@ -71,14 +71,3 @@ for scale in scales:
     iface.put("image0:gridScaleX", scale)
     time.sleep(0.1)
 ```
-
-### Testing with EPICS Channel Access
-
-The simulated EPICS camera can be run from Docker:
-
-https://hub.docker.com/r/klauer/simioc-docker
-
-```bash
-python3 setup_SimDetector.py
-python3 -m imagin -b epics sim:det -m 16 -t 80
-```
