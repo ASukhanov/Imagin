@@ -8,7 +8,7 @@ infrastructure, from USB cameras or from files
 # pylint: disable=missing-function-docstring
 # pylint: disable=line-too-long
 
-__version__ = 'v3.0.0 2026-10-22'# pylinting, replace lambda with partial
+__version__ = 'v3.0.0 2026-10-2022'# pylinting, replace lambda with partial
 import sys
 import os
 from pathlib import Path
