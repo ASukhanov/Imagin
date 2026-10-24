@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
   "numpy<2",
-  "Pillow>=8",
+  "Pillow>=13.0.0",
   "PyQt5>=5.15",
   "pyqtgraph>=0.14",
   "scipy>=1.11.4",
