@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "imagin"
-version = "3.0.1"
+version = "3.0.3"
 authors = [
   { name="Andrey Sukhanov", email="sukhanov@bnl.gov" },
 ]
@@ -17,11 +17,11 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-  "numpy<2",
+  #"numpy<2",
   "Pillow>=13.0.0",
   "PyQt5>=5.15",
   "pyqtgraph>=0.14",
-  "scipy>=1.11.4",
+  "scipy>=1.17",
 ]
 
 [project.optional-dependencies]

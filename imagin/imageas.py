@@ -1,10 +1,16 @@
 """Image analysis methods"""
-__version__ = 'v0.1.8 2026-10-22'# minor cleanup
+__version__ = 'v1.0.0 2026-11-01'# Can read frames from video files. fitbBaseBound processing removed, it was not used anywhere, and it was slowing down the processing
 # pylint: disable=invalid-name
+# pylint: disable=broad-exception-caught
 
+import time
 import math
+import io
+import os
 import numpy as np
 from scipy import ndimage
+from scipy.interpolate import splrep, sproot, splev
+from scipy.optimize import curve_fit
 
 X,Y = 0,1
 
@@ -91,6 +97,7 @@ def stdev(x,weights): #using np.average
     mean = np.average(x,weights=weights)
     stDev = np.sqrt(np.average((x - mean)**2, weights=weights))
     return weights.sum(), mean, stDev 
+
 def stdev_dot_based(x,weights):
     """Returns mean and standard deviation of array of weights
     using np.dot. Slightly faster than the average-based.
@@ -104,14 +111,16 @@ def movingAverage (values, window):
     weights = np.repeat(1.0, window)/window 
     return np.convolve(values, weights, 'valid') 
 
-from scipy.interpolate import splrep, sproot, splev
-class FWHM(Exception): pass
+# class FWHM(Exception):
+#     """Exception raised when full-width-half-maximum cannot be determined."""
+#     pass
+
 def fwhms(y):
     """Determine full-with-half-maximum of a peaked set of points, x and y.
     The function uses a spline interpolation. Reliable after 6-point smoothing
     Performance:0.3ms/800pts"""
     #ts = timer()
-    l = len(y)
+    #l = len(y)
     #wl = l//20
     wl = 6
     if wl > 1:
@@ -133,7 +142,7 @@ def fwhms(y):
 
 def centroid(data):
     """Returns first (mean) an second (sigma) central moments and 
-    Person Correlation Coefficient of 2D array data, 
+    Pearson Correlation Coefficient of 2D array data, 
     Caution on PCC calculation: depending on the numbers involved, it can 
     sometimes be numerically unstable."""
     s = np.zeros(2) # sum of samples along axis
@@ -168,7 +177,7 @@ def centroid(data):
 #````````````````````````````Fitting helpers``````````````````````````````````
 def calculate_fitRange(region,iPosMax,width):
     """Calculate range of the fitting area
-    IMPORTANT! using less than 6*width may cause underestimated baseline."""
+    IMPORTANT! using less than 6*width may cause under-estimated baseline."""
     lArr = region.shape[1],region.shape[0]
     fitRange = []
     for axis in (X,Y):   
@@ -185,7 +194,7 @@ def calculate_fitRange(region,iPosMax,width):
         else:
             fitRange.append((il,ir))
     return fitRange
-        
+
 def estimate_spot_amplitude(region,iPosMax):
     subRegion = region[iPosMax[1]-1:iPosMax[1]+2,iPosMax[0]-1:iPosMax[0]+2]
     return subRegion.mean()
@@ -195,7 +204,6 @@ def estimate_base(a):
     h,w = a.shape
     return np.mean(list(a[0]) + list(a[:,w-1]) + list(a[h-1]) + list(a[:,0]))
 
-from scipy.optimize import curve_fit
 RankBkg = 1 # Rank = 3 is troublesome for wide peaks, it favors the quadratic background 
 PBase = 0           # Function parameter defining the baseline
 PPos = RankBkg      # Function parameter defining the peak position
@@ -208,9 +216,12 @@ def peak_shape(xx, halfWidth):
     It should be in a performance-optimized form.
     The halfWidth = sqrt(2)*sigma.
     """
-    try: r = np.exp(-0.5*(xx/halfWidth)**2) 
-    except: r = np.zeros(len(x))
+    try:
+        r = np.exp(-0.5*(xx/halfWidth)**2)
+    except Exception:
+        r = np.zeros(len(xx))
     return r
+
 def func_sum_of_peaks(xx, *par):
     """Fitting function: base and sum of peaks."""
     #print('fsop:',par)
@@ -219,7 +230,8 @@ def func_sum_of_peaks(xx, *par):
     for i in range(RankBkg,len(par),3):
         s += par[i+2]*peak_shape(xx-par[i],par[i+1])
     return s
-def fit_gaus1D(xr, yr, guess, bounds=(-np.inf, np.inf),axis='?'):
+
+def fit_gaus1D(xr, yr, guess, axis='?'):#, bounds=(-np.inf, np.inf),axis='?'):
     """Fit 1D gaussian to the data"""
     try:
         fp,pcov = curve_fit(func_sum_of_peaks,xr,yr,
@@ -237,7 +249,8 @@ def fit_gaus1D(xr, yr, guess, bounds=(-np.inf, np.inf),axis='?'):
         cprintw(msg)
         return []
     return fp
-def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
+
+def fit_region_1D(fitRegion, posGuess, width, maxLevel, base):#,fitBaseBounds):
     """One-dimensional gaussian fit of the fitRegion"""
     fittedPars = []
     #v213#pos = []
@@ -247,7 +260,7 @@ def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
     #/*print( 'fr',fitRegion.shape)
     for axis in (X,Y):
         projection = np.sum(fitRegion,axis=axis,dtype=np.float)
-        nP = fitRegion.shape[axis] # number of points summed in each column
+        #nP = fitRegion.shape[axis] # number of points summed in each column
         xyLetter = 'XY'[axis]
         #/*print( 'lp',axis,len(projection),np.argmax(projection))
 
@@ -258,24 +271,24 @@ def fit_region_1D(fitRegion,posGuess,width,maxLevel,base,fitBaseBounds):
         #print( 'guess'+xyLetter+': '+', '.join(['%.2f'%i for i in guess]))*/
 
         # bounds may significantly slow the performance, from 7ms to 20ms
-        gl = len(guess) - 1
-        bounds = ([fitBaseBounds[0]*nP]+[-np.inf]*gl,
-          [fitBaseBounds[1]*nP]+[+np.inf]*gl)        
-        #/*bounds = ([-np.inf]+[-np.inf]*gl, [+np.inf]+[+np.inf]*gl)
-        #print('bounds',bounds)*/
+        # gl = len(guess) - 1
+        # bounds = ([fitBaseBounds[0]*nP]+[-np.inf]*gl,
+        #   [fitBaseBounds[1]*nP]+[+np.inf]*gl)        
+        # #/*bounds = ([-np.inf]+[-np.inf]*gl, [+np.inf]+[+np.inf]*gl)
+        # #print('bounds',bounds)*/
 
         lArr = len(projection)
         xr = list(range(lArr))
         yr = projection
 
         #ts = timer()
-        fp = fit_gaus1D(xr,yr,guess,bounds,axis=xyLetter)
+        fp = fit_gaus1D(xr, yr, guess, axis=xyLetter)
         #print( 'fitted: '+', '.join(['%.2f'%i for i in fp])+'. time:%.3f'%(timer()-ts))
         fittedPars.append(fp)
     try:
         pos = np.array((fittedPars[0][PPos],fittedPars[1][PPos]))
         sigmas = np.array((fittedPars[0][PWidth],fittedPars[1][PWidth]))
-    except Exception as e:
+    except Exception:
         #printw('exception in fit_region_1D:'+str(e))
         pass
     return pos,np.abs(sigmas),fittedPars
@@ -307,7 +320,7 @@ def twoD_Gaussian(xy, amplitude, xo, yo, sigma_x, sigma_y, offset):
     g = offset + amplitude*np.exp( - (a*((x-xo)**2) + c*((y-yo)**2)))
     return g.ravel()
 
-def fit_region_2D(fitRegion,pos,width,amp,base,fitBaseBounds):
+def fit_region_2D(fitRegion, pos, width, amp, base):#,fitBaseBounds):
     """Two-dimensional gaussian fit of the fitRegion"""
     #/*print( '>f2G',fitRegion.shape,pos,width,fitBaseBounds)*/
     fittedPars = []
@@ -346,7 +359,7 @@ def fit_region_2D(fitRegion,pos,width,amp,base,fitBaseBounds):
     return np.array((fp[1],fp[2])), np.array((sX,sY)), fittedPars
 
 def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
-               fitBaseBounds = (-np.inf,+np.inf), ofs=(0.,0.)):
+               ofs=(0.,0.)):#fitBaseBounds = (-np.inf,+np.inf), 
     """Find up to maxSpots in the ndarray region and return its centroids 
     and sums"""
     #print( 'fitBaseBounds',fitBaseBounds)
@@ -368,16 +381,16 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
     if number_of_objects == 0:
         #/*print('no objects:',region.shape,np.max(region),np.sum(region))*/
         return [[],[]]
-    profile('sums') #TODO: 30% of processing time spent here
+    profile('sums') #TODO#: 30% of processing time spent here
     peak_slices = ndimage.find_objects(labeled)
-    profile('find') #TODO: 15% of processing time spent here
+    profile('find') #TODO#: 15% of processing time spent here
 
     # sort the labels according to their sums
     sums = ndimage.sum(above_threshold,labeled,
       index=list(range(1,number_of_objects+1)))
     sumsSorted = sorted(enumerate(sums),key=lambda idx: idx[1],reverse=True)
     labelIndexesSortedBySum = [i[0] for i in sumsSorted]
-    profile('sort') #TODO: 15% of processing time spent here
+    profile('sort') #TODO#: 15% of processing time spent here
 
     # calculate centroids
     centroids = []
@@ -421,14 +434,14 @@ def find_spots(region, threshold, maxSpots, fitBrightest = 'None',
             # fit the region
             if fitBrightest == '2D':
                 posFit,wFit,fittedPars = \
-                  fit_region_2D(fitRegion,posGuess,w,amp,base,fitBaseBounds)
+                  fit_region_2D(fitRegion,posGuess,w,amp,base)#,fitBaseBounds)
             else:
                 posFit,wFit,fittedPars = \
-                  fit_region_1D(fitRegion,posGuess,w,amp,base,fitBaseBounds)
+                  fit_region_1D(fitRegion,posGuess,w,amp,base)#,fitBaseBounds)
             #print( 'fitting time %.4f'%(timer() - ts))
             if len(posFit) == 0:
                 break
-        profile('fitting')        
+        profile('fitting')
         pos[X] += ofs[X]
         pos[Y] += ofs[Y]
 
@@ -447,6 +460,7 @@ class CodecPIL():
         from PIL import Image
         self.Image = Image
         self.img = None
+        print('CodecPIL: Pillow version',Image.__version__)
 
     def load(self,fname):
         """Load image from file fname and return it as numpy array
@@ -457,9 +471,8 @@ class CodecPIL():
             self.img = self.img.convert('RGB')
         return np.asarray(self.img)
         
-    def loadFromData(self,blob): # not used
+    def loadFromData(self,blob):
         """Load image from binary data blob and return it as numpy array"""
-        import io
         if isinstance(blob,tuple):
             blob = bytearray(blob)
         self.img = self.Image.open(io.BytesIO(blob))
@@ -482,7 +495,72 @@ class CodecPIL():
         #else:#except Exception as e:
         #    printe('in CodecPIL.save():'+str(e))
 
-Codec = CodecPIL
+class CodecCV():
+    """Codec using OpenCV library"""
+    def __init__(self):
+        import cv2 as cv
+        self.cv = cv
+        self.img = None
+        print('CodecCV: OpenCV version',cv.__version__)
+        self.cap = None
+
+    def open_video(self, videoSource):
+        """Open a video source (file or camera) using OpenCV"""
+        if videoSource is not None:
+            self.cap = self.cv.VideoCapture(videoSource)
+            if not self.cap.isOpened():
+                raise FileNotFoundError(f"Cannot open {videoSource}")
+            self.videoCreationTime = os.path.getctime(videoSource)
+            print(f'Video source opened: {videoSource}, creation time: {time.ctime(self.videoCreationTime)}')
+            number_of_frames = int(self.cap.get(self.cv.CAP_PROP_FRAME_COUNT))
+            return number_of_frames
+
+    def load(self, fname):
+        """Load image or frame from file fname and return it as numpy array"""
+        self.img = self.cv.imread(fname, self.cv.IMREAD_UNCHANGED)
+        if self.img is None:
+            raise RuntimeError(f"Cannot read {fname}")
+        return self.img
+
+    def load_frame(self, frameNumber):
+        """Load a specific frame from the video and return it as numpy array, also return the timestamp in seconds since epoch"""
+        self.cap.set(self.cv.CAP_PROP_POS_FRAMES, frameNumber)
+        ok, frame = self.cap.read()
+        if not ok:
+            raise RuntimeError(f"Cannot read frame {frameNumber}")
+
+        # Convert the frame to grayscale if it's not already
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
+            frame = self.cv.cvtColor(frame, self.cv.COLOR_BGR2GRAY)    
+
+        self.img = frame
+        timestamp = self.cap.get(self.cv.CAP_PROP_POS_MSEC) / 1000.0  # Convert milliseconds to seconds
+        timestamp += self.videoCreationTime  # Add the video creation time to get the absolute timestamp
+        return self.img, timestamp
+
+    def save(self, fileName, npArray=None):
+        """Save numpy array npArray as image to file fileName.
+        If npArray is None, save the last loaded image."""
+        #print(f"Saving image {npArray.shape, npArray.dtype} to {fileName}...")
+        if npArray is not None:
+            img = npArray
+            if npArray.dtype != np.uint16:
+                if npArray.dtype != np.uint8:
+                    img = np.clip(npArray, 0, 65535).astype(np.uint16)
+        else:
+            img = self.img
+        self.cv.imwrite(fileName,img)
+
+    def loadFromData(self,blob):
+        """Load image from binary data blob and return it as numpy array"""
+        if isinstance(blob,tuple):
+            blob = bytearray(blob)
+        self.img = self.cv.imdecode(np.frombuffer(blob, np.uint8), self.cv.IMREAD_UNCHANGED)
+        if self.img is None:
+            raise RuntimeError("Cannot decode image from data blob")
+        return self.img
+    
+Codec = CodecPIL# default codec, can be changed to CodecCV if needed
 '''to show an image in ipython:
 %gui qt
 import pyqtgraph as pg

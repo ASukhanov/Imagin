@@ -8,7 +8,7 @@ infrastructure, from USB cameras or from files
 # pylint: disable=missing-function-docstring
 # pylint: disable=line-too-long
 
-__version__ = 'v3.0.0 2026-10-2022'# pylinting, replace lambda with partial
+__version__ = 'v4.0.0 2026-11-01'# Major re-factoring, added support for 16-bit and 8-bit videos, improved GUI and performance  
 import sys
 import os
 from pathlib import Path
@@ -29,7 +29,10 @@ from functools import partial
 import json
 import numpy as np
 from . import imageas as ialib
-Codec = ialib.Codec()
+
+# Image IO library, can be either CodecPIL or CodecCV
+#ImagIO = ialib.CodecPIL()
+ImagIO = ialib.CodecCV()
 
 from scipy import ndimage
 import pyqtgraph as pg
@@ -98,10 +101,12 @@ Prec = 3 # precision for logging and display
 X,Y = 0,1
 DisablingThreshold = -1000
 # analysis is disabled if threshold is less than or equal DisablingThreshold
+ProcessingTimeout = 2.0 # seconds, timeout for processing an image.
 #````````````````````````````Necessary explicit globals```````````````````````
 pargs = None
 imager = None
 # define signal on data arrival
+# Signal to Monitor thread that it can poll for new data, and that the processing is finished
 EventProcessingFinished = threading.Event()
 EventExit = threading.Event()
 
@@ -236,11 +241,13 @@ def rotate(data,degree):
         #if degree: data = st.rotate(data, degree, resize = True, preserve_range = True)
         if degree:
             datao = ndimage.rotate(data, degree, reshape = True, order=1)
+        else:
+            datao = data
     #printi('rotate time:'+str(timer()-s))
     if pargs.flip:
         if   pargs.flip == 'V':
             return datao[::-1,...]
-        elif pargs.flip == 'H':
+        if pargs.flip == 'H':
             return datao[:,::-1,...]
     return datao
 
@@ -250,7 +257,7 @@ class MainWindow(QW.QMainWindow):
 
     resized = QtCore.Signal()
     def  __init__(self, parent=None):
-        print('Initializing MainWindow')
+        printi('Initializing MainWindow')
         super(MainWindow, self).__init__(parent=parent)
         #TODO# self.resized.connect(imager.window_resized)
 
@@ -404,7 +411,7 @@ class GraphRoiIntensity():
         self.widget.setLabel('top',topline)
 
     def __del__(self):
-        #printi('deleting GraphRoiIntensity')
+        printi('deleting GraphRoiIntensity')
         try:
             self.widget.close()
         except Exception:
@@ -484,7 +491,7 @@ class CustomViewBox(pg.ViewBox):
 
         return self.menu
 #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-def MySlot(a):
+def MySlot(_a):
     """Global redirector of the SignalSourceDataReady"""
     #printd('>MySlot received event:'+str(a))
     if imager is not None:
@@ -663,8 +670,7 @@ class PVMonitor(QtCore.QThread): # inheritance from QtCore.QThread is needed for
         It is used as is for the file monitor, but should be overridden for other monitors."""
         #TODO#: using cprint is not thread-safe as it calls GUI.
         while not EventExit.is_set():
-            EventProcessingFinished.wait(2)
-            if EventProcessingFinished.is_set():
+            if EventProcessingFinished.wait(ProcessingTimeout):
                 EventProcessingFinished.clear()
                 ct = timer()
                 time.sleep(self.refreshTime)
@@ -675,7 +681,8 @@ class PVMonitor(QtCore.QThread): # inheritance from QtCore.QThread is needed for
                         (ct-ProfilingStates['Finish'])))
                 self.SignalSourceDataReady.emit('sourceDataReady')
             else:
-                print('Processing timeout')
+                #print('Processing timeout')
+                pass
         printi('PVMonitor.thread_process exit')
 
     def clear(self):
@@ -692,9 +699,10 @@ class PVMonitor(QtCore.QThread): # inheritance from QtCore.QThread is needed for
 #````````````````````````````PVMonitor for data from a file```````````````````
 class PVMonitorFile(PVMonitor):
     """PVMonitor subclass for reading data from image files."""
-    def __init__(self,pvname,**kwargs):
+    def __init__(self, pvname, **kwargs):
         self.__version__ = 'v0.0.1'
         super(PVMonitorFile,self).__init__()
+        self.pvname = str(pvname)
         if isinstance(pvname, str):
             pvname = [pvname]
         if len(pvname)==1:
@@ -716,6 +724,18 @@ class PVMonitorFile(PVMonitor):
             if len(self.fileList) == 0:
                 printe(f'No such files: {globname}')
                 sys.exit(1)
+        self.lastFileIdx = len(self.fileList)
+
+        # Check if the given filename has a video file extension
+        self.is_video = False
+        if nFiles == 1:
+            ext = os.path.splitext(self.fileList[0])[1].lower()
+            if ext in ['.mp4', '.avi', '.mpeg', '.mkv']:
+                #self.video = cv2.VideoCapture(self.fileList[0])
+                self.lastFileIdx = ImagIO.open_video(self.fileList[0])
+                # evaluate creation time of the video file
+                self.is_video = True
+                printi(f'Video file detected: {self.fileList[0]}')
 
         try:
             self.cameraName = kwargs['camName']
@@ -730,7 +750,6 @@ class PVMonitorFile(PVMonitor):
         self.qimg = QtGui.QImage() # important to have it persistent
         self.profN = len(self.fileList)
         self.curFileIdx = 0
-        self.lastFileIdx = len(self.fileList)
         self.start_thread_process()
 
     def trash(self,fromIdx):
@@ -775,16 +794,33 @@ class PVMonitorFile(PVMonitor):
         """Stop the file monitoring thread."""
         self.exit = True
 
+    def get_data_from_video(self):
+        """Process the next frame from the video file and return it along with its timestamp."""
+        if self.curFileIdx >= self.lastFileIdx:
+            printw('No more frames in video.')
+            return [], 0
+        frame, timestamp = ImagIO.load_frame(self.curFileIdx)
+        printd(f'Video frame {self.curFileIdx} timestamp: {timestamp} seconds since epoch')
+
+        self.data = frame
+        self.curFileIdx += 1
+        self.eventNumber += 1
+        return self.data, timestamp
+
     def get_data_and_timestamp(self):
         """Retrieve the next image file and its timestamp."""
+        printd('>get_data_and_timestamp')
+        if self.is_video:
+            return self.get_data_from_video()
+
         #print(f'>get_data_and_timestamp curFileIdx:{self.curFileIdx}, lastFileIdx:{self.lastFileIdx}')
         try:
             fname = self.fileList[self.curFileIdx]
-            if self.curFileIdx > self.lastFileIdx:
-                #printd(f'curFileIdx {self.curFileIdx} > {self.lastFileIdx}')
-                raise IndexError
+            # if self.curFileIdx > self.lastFileIdx:
+            #     #printd(f'curFileIdx {self.curFileIdx} > {self.lastFileIdx}')
+            #     raise IndexError
         except IndexError:
-            print(f'No more files: {self.curFileIdx}')
+            printi(f'No more files: {self.curFileIdx}')
             # no more files, do not update timestamp
             cprint(f'Processed {self.profN-1} images in {time.time()-imager.profTime:0.4g} s')
             if imager.addon:
@@ -798,7 +834,7 @@ class PVMonitorFile(PVMonitor):
 
         # New file, update timestamp
         #print(f'Processing file {self.curFileIdx}: {fname}')
-        self.curFileIdx +=1
+        self.curFileIdx += 1
         self.pvname = fname
         # extract timestamp from the filename
         try:
@@ -814,9 +850,9 @@ class PVMonitorFile(PVMonitor):
 
         # load image
         _profile('>il')
-        self.data = Codec.load(fname)
+        self.data = ImagIO.load(fname)
         _profile('image loading')
-        self.eventNumber +=1
+        self.eventNumber += 1
         return self.data,timestamp
 
 #````````````````````````````PVMonitor for a HTTP image```````````````````````
@@ -828,6 +864,7 @@ class PVMonitorHTTP(PVMonitor):
         self.pvsystem = 'HTTP'
         self.qimg = QtGui.QImage() # important to have it persistent
         self.req = Backend.get(pvname)
+        printi('CreatingPVMonitorHTTP')
 
     def get_data_and_timestamp(self):
         self.eventNumber +=1
@@ -840,7 +877,7 @@ class PVMonitorHTTP(PVMonitor):
             print(('Content-Type:',self.req.headers['Content-Type']))
             print(('cont:',type(self.req.content),len(self.req.content)\
             ,self.req.content[:20]))
-        self.data = Codec.loadFromData(self.req.content)
+        self.data = ImagIO.loadFromData(self.req.content)
         return self.data,time.time()
 
     def clear(self):
@@ -850,7 +887,7 @@ class PVMonitorHTTP(PVMonitor):
 #````````````````````````````PVMonitor subclass for an EPICS Process Variable`````````
 class PVMonitorEpics(PVMonitor):
     """PVMonitor subclass for an EPICS Process Variable."""
-    def __init__(self,camName,**kwargs):
+    def __init__(self, camName, **_kwargs):
         super(PVMonitorEpics,self).__init__()
         try:
             from . import epicsAccess_caproto as epicsInterface
@@ -875,7 +912,7 @@ class PVMonitorEpics(PVMonitor):
         printi(('width modified: '+pargs.width))
 
         # setup subscribed delivery
-        r = self.pvAccess.subscribe(self.callback, self.subscribedPV)
+        _r = self.pvAccess.subscribe(self.callback, self.subscribedPV)
         self.SignalSourceDataReady.connect(MySlot)
 
     def _getv(self, pv):
@@ -1010,23 +1047,23 @@ class PVMonitorPVA(PVMonitor):
         self.SignalSourceDataReady.connect(MySlot)
 
     def clear(self):
-        print('Closing PVA subscription')
+        printi('Closing PVA subscription')
         self.subscription.close()
 
     def callback(self, value):
         """Callback function for PVAccess subscription, triggered when the subscribed PV changes."""
         _profile('>callback')
-        if imager.paused:
-            return
         self.value = value
         ts = time.time()
+
+        # Emit the data ready signal only if enough time has passed since the last event and if processing is finished or it's the first event.
         if ts >= self.timeOfPreviousEvent + self.refreshTime:
             self.timeOfPreviousEvent = ts
             if EventProcessingFinished.is_set() or self.eventNumber == 0:
                 EventProcessingFinished.clear()
                 self.SignalSourceDataReady.emit('sourceDataReady')
-            else:
-                print('image dropped due to busy analysis')
+            # else:
+            #     print('image dropped due to busy analysis')
         else:
             # do not emit data ready signal
             print('image came too soon')
@@ -1111,7 +1148,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.outsideGraphs = {}
         self.is_host_priviledged = True
         self.blurWidth = 0.
-        self.fitBaseBounds = [-np.inf, +np.inf]
+        #self.fitBaseBounds = [-np.inf, +np.inf]
         self.normalize = pargs.pixLimit == 0.
         self.stdPars = []
         self.addon = None
@@ -1196,7 +1233,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 pass
             pargs.finalFit = fitS
         #printi('Fitting mode:'+str(pargs.finalFit))
-        
+
         ## evaluate pixLimit
         self.pixLimit = pargs.pixLimit
         #if self.pixLimit == 0:
@@ -1257,9 +1294,9 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         EventExit.set() # to stop the processing thread
         if self.addon:
             self.addon.exit()
-        for outsideGraph in self.outsideGraphs.items():
-            #self.outsideGraphs[item].__del__()
-            outsideGraph.widget.close()
+        for outsideGraph in self.outsideGraphs.values():
+            print(f'Closing outside graph: {outsideGraph}')
+            del outsideGraph
         try:
             self.win.close()
         except Exception:
@@ -1326,7 +1363,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.partitioning = None if pargs.part == 'None' else pargs.part
         self.numRefs = 5
         refs = ['None']+['_ref'+str(i) for i in range(self.numRefs)]
-        refreshList = ['','1Hz','0.1Hz','10Hz','Instant']
+        refreshList = [f'{pargs.refreshRate}Hz','1Hz','0.1Hz','10Hz','Instant']
 
         controlGroup = [
             {'name':'Image#','type':'str','value':'0',
@@ -1379,7 +1416,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 {'name':'RefRing', 'type': 'bool', 'value': False,
                   'tip':'Draw reference ring'},
                 ComplexParameter(name='RefRing Adj',expanded=False),
-                {'name':'Refresh Rate', 'type':'list',
+                {'name':'Refresh Rate', 'type':'list', 'value':pargs.refreshRate,
                   'values':refreshList,
                   'tip':'Refresh rate'},
                 {'name':'Reset ROI', 'type': 'button',
@@ -1478,10 +1515,10 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                   'tip':'Show pointer coordinates and intensity '},
                 {'name':'Blur ROI', 'type':'float','value':self.blurWidth,
                   'tip':'Streaming blurring of the ROI'},
-                {'name':'FitBaseLo', 'type':'float','value':-1.e9,
-                  'tip':'Lover bound for fitted baseline'},
-                {'name':'FitBaseHi', 'type':'float','value':1.e9,
-                  'tip':'Upper bound for fitted baseline'},
+                # {'name':'FitBaseLo', 'type':'float','value':-1.e9,
+                #   'tip':'Lover bound for fitted baseline'},
+                # {'name':'FitBaseHi', 'type':'float','value':1.e9,
+                #   'tip':'Upper bound for fitted baseline'},
                 {'name':'Debug', 'type': 'bool', 'value': False},
             ]})
         params += [
@@ -1522,27 +1559,27 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 if item_name == 'Next':
                     self.show_isocurve(False)
                     EventProcessingFinished.set()
+                    currentEvent = self.events
                     self.set_pause(True)
                     return
 
-                if pargs.backend == 'file':
-                    backend_handlers = {
-                        'Prev': partial(_handle_file_prev),
-                        'FirstFile': partial(_handle_file_jump, 'first'),
-                        'LastFile': partial(_handle_file_jump, 'last'),}
-                    handler = backend_handlers.get(item_name)
-                    if handler:
-                        handler(item_data)
-                    return
-
+                # Handle other control parameters using a dictionary of handlers for better organization and maintainability.
                 backend_handlers = {
-                    'Saving': partial(_handle_control_saving),
-                    'View saved': partial(_handle_view_saved),
-                    'Gpm/LogView': partial(_handle_gpm_log_view),
                     'Threshold': partial(_handle_threshold),
                     'Normalize': partial(_handle_normalize),
                     'PixLimit': partial(self.set_pixLimit),
                 }
+                if pargs.backend == 'file':
+                    backend_handlers.update({
+                        'Prev': partial(_handle_file_prev),
+                        'FirstFile': partial(_handle_file_jump, 'first'),
+                        'LastFile': partial(_handle_file_jump, 'last'),
+                    })
+                else:
+                    backend_handlers.update({
+                        'Saving': partial(_handle_control_saving),
+                        'View saved': partial(_handle_view_saved),
+                    })
                 handler = backend_handlers.get(item_name)
                 if handler:
                     handler(item_data)
@@ -1625,7 +1662,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                         if not qMessage('Are you sure you want to'
                         ' overwrite '+item_data+'?'):
                             return
-                    Codec.save(file_name, self.data)
+                    ImagIO.save(file_name, self.data)
                     cprint('Current image saved to '+file_name)
                     return
 
@@ -1638,8 +1675,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                     'SpotText': partial(_handle_spot_text),
                     'PointerText': partial(_handle_pointer_text),
                     'Blur ROI': partial(_handle_blur_roi),
-                    'FitBaseLo': partial(_handle_fit_base_bounds, bound='lo'),
-                    'FitBaseHi': partial(_handle_fit_base_bounds, bound='hi'),
+                    # 'FitBaseLo': partial(_handle_fit_base_bounds, bound='lo'),
+                    # 'FitBaseHi': partial(_handle_fit_base_bounds, bound='hi'),
                     'Fast': partial(_handle_fast_mode),
                     'Debug': partial(_handle_debug),
                 }
@@ -1652,18 +1689,14 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                     handler(item_data)
 
             def _handle_file_prev(_args):
-                print(f'prev: {_args}')
                 self.events = max(self.events - 2, 0)
-                print('prev:jumping to file index: '+str(self.events))
                 pvMonitor.curFileIdx = self.events
                 self.gl.setBackground(self.viewBoxBackgroundColor)
                 EventProcessingFinished.set()
 
             def _handle_file_jump(kind, value):
-                print(f'hfj: {kind}: {value}')
                 if kind == 'first':
                     self.events = value
-                    print('first:jumping to file index: '+str(self.events))
                     pvMonitor.curFileIdx = self.events
                 if kind == 'first':
                     EventProcessingFinished.set()
@@ -1691,21 +1724,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 except Exception as e:
                     cprinte('in View saved: '+str(e))
 
-            def _handle_gpm_log_view(value):
-                path = '/operations/app_store/Gpm/'
-                fn = 'img.'+self.cameraName[0]+'.logreq'
-                cmd_arg = {'LEReC':path+'LEReC/Cameras/'+fn,
-                           'CEC':path+'RHIC/Systems/CeC/Cameras/'+fn,
-                           'RHIC':path+'RHIC/Instrumentation/Cameras/'+fn}[pargs.controlSystem]
-                if value in ('Gpm','LogView'):
-                    try:
-                        cmd = [value,'-file',cmd_arg]
-                        cprint('Executing:'+str(cmd))
-                        subprocess.Popen(cmd)
-                    except Exception as e:
-                        cprinte('in Gpm: '+str(e))
-
             def _handle_threshold(value):
+                printd(f'>Control: Threshold changed to {value}')
                 self.threshold = value
                 if self.isoInRoi:
                     self.iso.setData(ialib.blur(self.roiArray))
@@ -1716,6 +1736,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 self.iso.setLevel(self.threshold)
                 if self.roi:
                     self.update_ROI()
+                printd('<Control: Threshold change handled')
 
             def _handle_normalize(value):
                 self.normalize = value
@@ -1896,15 +1917,15 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 self.data = self.dataOriginal
                 self.update_imageItem_and_ROI()
 
-            def _handle_fit_base_bounds(value, bound):
-                if bound == 'lo':
-                    self.fitBaseBounds[0] = value
-                    if self.fitBaseBounds[0] <= -1.e9:
-                        self.fitBaseBounds[0] = -np.inf
-                else:
-                    self.fitBaseBounds[1] = value
-                    if self.fitBaseBounds[1] >= 1.e9:
-                        self.fitBaseBounds[1] = np.inf
+            # def _handle_fit_base_bounds(value, bound):
+            #     if bound == 'lo':
+            #         self.fitBaseBounds[0] = value
+            #         if self.fitBaseBounds[0] <= -1.e9:
+            #             self.fitBaseBounds[0] = -np.inf
+            #     else:
+            #         self.fitBaseBounds[1] = value
+            #         if self.fitBaseBounds[1] >= 1.e9:
+            #             self.fitBaseBounds[1] = np.inf
 
             def _handle_fast_mode(value):
                 if value:
@@ -1967,7 +1988,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 if not ch2.readonly:
                     ch2.sigValueChanged.connect(valueChanged)
                     #ch2.setKeyboardTracking(False) # does not work
-                    
+
         #````````````````````Create docks, place them into the window`````````
         # Note that size arguments are only a suggestion; docks will still
         # have to fill the entire dock area and obey the limits of their
@@ -1984,7 +2005,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.viewBox = CustomViewBox(name='viewbox')
         self.mainWidget = self.gl.addPlot(viewBox = self.viewBox)
         self.mainWidget.addItem(self.imageItem)
-        self.setup_main_widget()        
+        self.setup_main_widget()
         self.mainSpotText = _mainSpotText()
         self.update_mainSpotText()
         self.mainWidget.addItem(self.mainSpotText)
@@ -2021,6 +2042,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
 
         #if pargs.iso != 'Off' and self.contrast:
         if self.contrast:
+            printd('>Setting up isocurve item')
             # Setting up isocurve item, it will be updated in show_isocurve() when the image is shown
             # if pargs.iso == 'ROI':
             #     self.isoInRoi = True
@@ -2038,6 +2060,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             # Connect callback to signal
             #self.isoLine.sigDragged.connect(self.update_isocurve)
             self.isoLine.sigPositionChangeFinished.connect(self.update_isocurve)
+            printd('<Setting up isocurve item')
 
         if pargs.roi:
         # Custom ROI for selecting an image region
@@ -2053,7 +2076,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.roi.setZValue(10)  # make sure pargs.roi is drawn above image
 
             # create max number of spot labels
-            #self.spotLabels = [pg.TextItem('*',color='r',anchor=(0.5,0.5)) 
+            #self.spotLabels = [pg.TextItem('*',color='r',anchor=(0.5,0.5))
             self.spotLabels = [pg.TextItem('*',color=self.marksColor,
               anchor=(0.5,0.5)) for i in range(pargs.maxSpots)]
             for sl in self.spotLabels:
@@ -2136,7 +2159,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
 
     def set_dockPar_thread(self,child,grandchild,value):
         """Set dock parameter in a separate thread."""
-        printd('>set_dockPar_thread',child,grandchild,value)
+        printd(f'>set_dockPar_thread {child} {grandchild} {value}')
         time.sleep(.1)
         self.pgPar.child(child).child(grandchild).setValue(value)
 
@@ -2150,7 +2173,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         h,w = self.data.shape[:2]
         self.mainWidget.setRange(rect=pg.QtCore.QRect(0,0,w,h),padding=None)
         printd('<setup_main_widget')
-        
+
     def redraw_axes(self):
         self.needToRedrawAxes = False
         axx = self.mainWidget.getAxis('bottom')
@@ -2224,7 +2247,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             #print('fileName',fileName)
         try:
             ts = timer()
-            Codec.save(fileName, self.data)
+            ImagIO.save(fileName, self.data)
         except Exception as e:
             printe('save_image exception: '+str(e)+'\n'+traceback.format_exc())
 
@@ -2255,7 +2278,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
     def reference_operation(self,fileName,operation):
         """ binary operation with current and restored image """
         try:
-            data = self.shape_data(Codec.load(fileName))
+            data = self.shape_data(ImagIO.load(fileName))
             data = self.adjust_refData(data)
             if data is None:
                 raise NameError(operation)
@@ -2282,7 +2305,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             return None
         fn = self.refPath+str(ref)+'.png'
         try:
-            d = Codec.load(fn)
+            d = ImagIO.load(fn)
             if d is None:
                 raise NameError('')
             sd = self.shape_data(d)
@@ -2299,10 +2322,14 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.stopProcThread = True
         pvMonitor.clear()
         printi('imager stopped')
-        try:    self.addon.stop()
-        except Exception: pass
-        try: self.spotLog.close()
-        except Exception: pass
+        try:
+            self.addon.stop()
+        except Exception:
+            pass
+        try: 
+            self.spotLog.close()
+        except Exception:
+            pass
 
     def mm_per_pixel(self,xPx,yPx):
         """Scaling of pixels to mm (usually used for converting widths)."""
@@ -2337,7 +2364,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         # Find spots
         for stripIdx,strip in enumerate(strips):
             foundSpots,*_ = ialib.find_spots(strip,self.threshold,1,
-              fitBrightest = pargs.finalFit, fitBaseBounds=self.fitBaseBounds,
+              fitBrightest = pargs.finalFit,# fitBaseBounds=self.fitBaseBounds,
               ofs=(0,(stripIdx)*stripHeight))
             #print('foundSpots:',foundSpots)
             if len(foundSpots) == 0:
@@ -2360,7 +2387,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.spots,self.fitRegion\
             = ialib.find_spots(self.roiArray,self.threshold,
                     self.maxSpots, fitBrightest = pargs.finalFit,
-                    fitBaseBounds=self.fitBaseBounds)
+            ) # fitBaseBounds=self.fitBaseBounds)
         else:
             self.spots = self.find_partitioned_spots()
         self.mainSpotTxt = ''
@@ -2388,13 +2415,13 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 self.update_mainSpotText()
                 continue
             # store the spot parameters, they could be useful for user analysis
-            if wPx[0]*wPx[1] > 4.: # do not store too narrow spots 
+            if wPx[0]*wPx[1] > 4.: # do not store too narrow spots
                 tilt = theta if sigmaU > sigmaV else np.pi/2. + theta
                 self.stdPars.append([posPx,wPx,pcc,psum, # primary parameters
                     tilt,(sigmaU,sigmaV)]) # derivative parameters
                 #print('u,v,th,tilt',sigmaU,sigmaV,theta,tilt,wPx)
             # record the results
-            if self.spotLog: 
+            if self.spotLog:
                 if self.axesInMm:
                     posLog = self.pix2mm(*posPx)
                     wLog = self.mm_per_pixel(*wPx)
@@ -2406,7 +2433,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 wLog = [round(z,Prec) for z in wLog]
                 logdata['spot_'+str(spotIdx)] = (list(posLog),list(wLog),
                     round(pcc,Prec),round(psum,1))
-            
+
             # plot ellipse and text labels with position and widths
             if not self.cleanImage:
 
@@ -2414,7 +2441,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 self.spotLabels[spotIdx].setPos(*posPx)
 
                 too_small = max(wPx) < 0.1 # 0.1 is big enough for ellipse
-                if not too_small:                    
+                if not too_small:
                     # draw ellipse
                     spotShape = QW.QGraphicsEllipseItem(posPx[0]-sigmaU,
                         posPx[1]-sigmaV,sigmaU*2.,sigmaV*2.)
@@ -2457,7 +2484,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                     sx, _sy = self.viewBox.viewPixelSize() #scaling factors
                     if sx*sbr.width() > ibr.width():
                         self.mainSpotText.setText('')
-                                                
+
         # reset outstanding spotLabels
         for j in range(len(self.spots),len(self.spotLabels)):
             self.spotLabels[j].setPos(0,0)
@@ -2472,7 +2499,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             self.spotLog.write(json.dumps(logdata))#,indent=2))
             self.spotLog.write('\n')
             #printd('written:'+str(logdata))
- 
+
     def remove_spotShapes(self):
         """Remove previously drawn spot shapes and reset labels to (0,0)."""
         for s in self.spotShapes:
@@ -2480,8 +2507,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.spotShapes = []
 
         # move labels to 0
-        for i in range(len(self.spotLabels)):
-            self.spotLabels[i].setPos(0,0)
+        for spotLabel in self.spotLabels:
+            spotLabel.setPos(0,0)
 
     def cb_update_ROI(self):
         """callback for handling changed ROI"""
@@ -2520,6 +2547,13 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         if self.roi is None:
             return
         printd('>update_ROI')
+
+        # the following is much faster than getArrayRegion
+        slices = self.roi.getArraySlice(self.grayData,self.imageItem)[0][:2]
+        self.roiOrigin = slices[1].start, slices[0].start
+        self.roiArray = self.grayData[slices]
+        self.colorRoiArray = self.data[slices]
+
         if report:
             relativeRect = [float(v1)/float(v2) 
               for v1,v2 in zip(self.roiOrigin,self.data.shape[::-1])]
@@ -2528,12 +2562,6 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             cprint('ROI changed: '+str((self.roiOrigin,self.roiArray.shape,
               ['%0.2f'%i for i in relativeRect])))
             self.roiRect = [round(z,3) for z in relativeRect]
-
-        # the following is much faster than getArrayRegion
-        slices = self.roi.getArraySlice(self.grayData,self.imageItem)[0][:2]
-        self.roiOrigin = slices[1].start, slices[0].start
-        self.roiArray = self.grayData[slices]
-        self.colorRoiArray = self.data[slices]
 
         try:
             if self.pixLimit:
@@ -2557,7 +2585,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             if pargs.debase[0]:
                 #print(f'prominence:{pMinFilterWindow, pBlurWindow}')
                 self.roiArray = ialib.filter_prominence\
-                  (self.roiArray, pargs.debase[0], pargs.debase[1]) 
+                  (self.roiArray, pargs.debase[0], pargs.debase[1])
             try:
                 self.grayData[slices] = self.roiArray
             except Exception:
@@ -2627,7 +2655,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             except Exception as e:
                 printi(('exception in graph.update:'+str(e)))
                 #TODO, divide by zero encountered in log10 for intensity plot
-                #printw('exception in graph.update() for '+str(name))        
+                #printw('exception in graph.update() for '+str(name))
         _profile('roiPlot')
         printd('<update_ROI')
 
@@ -2643,15 +2671,16 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
 
     def update_isocurve(self):
         """Update the isocurve based on the current threshold."""
-        #print('update_isocurve')
+        printd('>update_isocurve')
         self.show_isocurve(True)
         # inform imager on changed threshold
         v = self.isoLine.value()
         self.set_dockPar('Control','Threshold',v)
+        printd('<update_isocurve')
 
     def show_isocurve(self, show=True):
         """Show or hide the isocurve based on the 'show' parameter."""
-        #print('show_isocurve',show)
+        printd('>show_isocurve')
         self.isocurve_enabled = show
         if show:
             self.iso.setPen(pg.mkPen('g'))
@@ -2660,7 +2689,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
                 self.iso.setPen(pg.mkPen(None))
             except Exception as e:
                 printe('in show_isocurve:'+str(e))
-                pass
+        printd('<show_isocurve')
 
     def mainWidget_changed(self):
         """Callback for when the main widget changes. This is used to handle redrawing of axes and updating the main spot text."""
@@ -2670,7 +2699,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         if self.axesInMm:
             self.needToRedrawAxes = True
         #print('need to redraw axes: ',self.needToRedrawAxes)
-        if self.mainSpotText: self.update_mainSpotText()
+        if self.mainSpotText:
+            self.update_mainSpotText()
 
     def correct_perspective(self):
         """Apply perspective transformation to the current image data."""
@@ -2722,7 +2752,8 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         elif self.pixLimit and self.contrast is not None:
             self.contrast.setLevels(0,self.pixLimit)
             self.contrast.setHistogramRange(0, self.pixLimit)
-        if self.contrast is not None: self.contrast.regionChanged() # update contrast histogram
+        if self.contrast is not None:
+            self.contrast.regionChanged() # update contrast histogram
         _profile('setImage')
         printd('<update_imageItem_and_ROI')
 
@@ -2812,7 +2843,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
             data = np.reshape(data,shape).astype('u2')
         #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         #````````````````````Got numpy array from data````````````````````````
-        self.dataLen = dataLen # save data length for monitoring        
+        self.dataLen = dataLen # save data length for monitoring
         data = data[::-1,...] # flip vertical axis
         data = ialib.crop_width(data) # correct the data width to be divisible by 4
         self.receivedData = data # store received data
@@ -2891,7 +2922,7 @@ class Imager(QtCore.QThread): # for signal/slot paradigm the inheritance from Qt
         self.events += 1
         #print(('event',self.events,'time',self.timestamp))
         self.set_dockPar('Control','Image#',str(self.events)) # concern: time=0.5ms
-        #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,            
+        #,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         if self.needToRedrawAxes:
             self.redraw_axes()
         if pargs.profile:
@@ -2963,7 +2994,6 @@ class AddonBase():
 
     def show(self):
         """Called when main window has been created."""
-        pass
 
     def cprint(self,msg):
         """Print in imageViewer console dock"""
@@ -2995,7 +3025,6 @@ class AddonBase():
 
     def image_detected(self):
         """Called when new image has been detected"""
-        pass
 
     def process(self):
         """Called when data region is updated"""
@@ -3251,13 +3280,6 @@ or -b http https://cdn.spacetelescope.org/archives/images/news/heic1523b.jpg.
         pvMonitor = PVMonitorEpics(pname,refreshRate=pargs.refreshRate)
         pargs.fullsize = True
     elif pargs.backend == 'usb':
-        Backend = cv2
-        #try:
-        #    Backend = cv2
-        #    print('cv2 imported')
-        #except ImportError:
-        #    print("ERROR python-opencv must be installed")
-        #    exit(1)        
         pvMonitor = PVMonitorUSB(pname,refreshRate=pargs.refreshRate)
         pargs.fullsize = True
     elif pargs.backend == 'pva':

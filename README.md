@@ -14,10 +14,11 @@ pip install imagin
 
 - **Input sources:**
   - EPICS PVAccess and Channel Access
-  - File system
+  - Image files, PNG is the default image format; other formats are also supported
+  - Video files, MKV, MP4; other formats are also supported
   - HTTP image URLs
   - USB cameras
-- PNG is the default image format; other formats are also supported.
+- 
 - Fast, robust characterization of multiple objects using fitted ellipsoids.
 - Supports images with 16-bit or higher channel depth.
 - Image orientation control and arbitrary rotation.
