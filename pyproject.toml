@@ -18,7 +18,8 @@ classifiers = [
 ]
 dependencies = [
   #"numpy<2",
-  "Pillow>=13.0.0",
+  #"Pillow>=13.0.0",
+  "opencv-python",
   "PyQt5>=5.15",
   "pyqtgraph>=0.14",
   "scipy>=1.17",
@@ -33,9 +34,6 @@ epics = [
 ]
 pva = [
   "p4p",
-]
-usb = [
-  "opencv-python",
 ]
 all = [
   "caproto",
